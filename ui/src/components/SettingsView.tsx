@@ -169,7 +169,13 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
   const gbPerHour = ((bitrate + AUDIO_MBPS) * 3600) / 8 / 1000;
   const tbPerYear = (gbPerHour * DISK_DAILY_HOURS * 365) / 1000;
 
-  const micOptions: [string, string][] = [["default", t("settings.micDevice.default")], ...mics.map((m): [string, string] => [m.id, m.name])];
+  const micOptions: [string, string][] = [
+    ["default", t("settings.micDevice.default")],
+    ...mics.map((m): [string, string] => [
+      m.id,
+      m.isDefault ? t("settings.micDevice.defaultName", { name: m.name }) : m.name,
+    ]),
+  ];
   // Keep the saved device selectable even if it is currently disconnected
   if (!micOptions.some(([id]) => id === draft.micDevice)) micOptions.push([draft.micDevice, t("settings.micDevice.unavailable")]);
 

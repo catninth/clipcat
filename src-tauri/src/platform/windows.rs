@@ -60,6 +60,33 @@ fn from_wide(buf: &[u16]) -> String {
     String::from_utf16_lossy(&buf[..len])
 }
 
+/// Match the communications capture endpoint used by OBS's default WASAPI input.
+pub fn default_mic_id() -> Option<String> {
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows::Win32::Media::Audio::{eCapture, eCommunications, IMMDeviceEnumerator, MMDeviceEnumerator};
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED};
+
+    unsafe {
+        let initialized = CoInitializeEx(None, COINIT_MULTITHREADED);
+        if initialized.is_err() && initialized != RPC_E_CHANGED_MODE {
+            return None;
+        }
+        let id = (|| {
+            let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+            let device = enumerator.GetDefaultAudioEndpoint(eCapture, eCommunications).ok()?;
+            let id = device.GetId().ok()?;
+            let result = id.to_string().ok().filter(|id| !id.is_empty());
+            CoTaskMemFree(Some(id.0.cast()));
+            result
+        })();
+        // A thread already initialized with another apartment model needs no matching uninitialize.
+        if initialized.is_ok() {
+            CoUninitialize();
+        }
+        id
+    }
+}
+
 /// CCD exposes the monitor's model name even when its driver is "Generic PnP Monitor".
 /// Match by device interface path so adapter ordering and cloned displays cannot swap names.
 fn monitor_model_names() -> HashMap<String, String> {

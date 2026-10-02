@@ -13,6 +13,36 @@ use tauri::{PhysicalPosition, WebviewWindow};
 
 const AUTOSTART_FILE: &str = "clipcat.desktop";
 
+/// PulseAudio and PipeWire's PulseAudio compatibility server expose the same source IDs as OBS.
+pub fn default_mic_id() -> Option<String> {
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new("pactl")
+        .arg("get-default-source")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                let output = child.wait_with_output().ok()?;
+                let id = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+                return (!id.is_empty()).then_some(id);
+            }
+            Ok(Some(_)) => return None,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
 fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }

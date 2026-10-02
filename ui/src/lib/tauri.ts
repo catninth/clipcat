@@ -63,6 +63,7 @@ export interface Clip {
 export interface Mic {
   id: string;
   name: string;
+  isDefault: boolean;
 }
 
 export interface Monitor {

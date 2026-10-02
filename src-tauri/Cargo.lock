@@ -525,6 +525,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tempfile",
+ "windows",
  "windows-sys 0.59.0",
  "winreg",
 ]

@@ -1067,20 +1067,32 @@ fn buffer_budget(seconds: u32, bitrate_mbps: u32) -> resources::BufferBudget {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Mic {
     id: String,
     name: String,
+    is_default: bool,
 }
 
 #[tauri::command]
-fn list_mics(app: AppHandle) -> Vec<Mic> {
-    state(&app)
-        .engine
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|e| e.list_mics().into_iter().map(|(id, name)| Mic { id, name }).collect())
-        .unwrap_or_default()
+async fn list_mics(app: AppHandle) -> Vec<Mic> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let default_id = platform::default_mic_id();
+        state(&app)
+            .engine
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|e| {
+                e.list_mics()
+                    .into_iter()
+                    .map(|(id, name)| Mic { is_default: default_id.as_deref() == Some(id.as_str()), id, name })
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[tauri::command]

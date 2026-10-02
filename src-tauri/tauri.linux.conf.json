@@ -4,10 +4,10 @@
     "targets": ["deb", "rpm", "appimage"],
     "linux": {
       "deb": {
-        "depends": ["obs-studio", "ffmpeg"]
+        "depends": ["obs-studio", "ffmpeg", "pulseaudio-utils"]
       },
       "rpm": {
-        "depends": ["obs-studio", "/usr/bin/ffmpeg"]
+        "depends": ["obs-studio", "/usr/bin/ffmpeg", "/usr/bin/pactl"]
       }
     }
   }

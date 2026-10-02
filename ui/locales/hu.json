@@ -94,6 +94,7 @@
   "settings.mic.always": "Mindig bekapcsolva",
   "settings.micDevice.label": "Mikrofon eszköz",
   "settings.micDevice.default": "Rendszer alapértelmezett",
+  "settings.micDevice.defaultName": "{name} (alapértelmezett)",
   "settings.micDevice.unavailable": "Nem elérhető eszköz",
   "settings.pttKey.label": "Push-to-talk gomb",
   "settings.pttKey.hint": "Billentyű vagy egérgomb (középső, oldalsó).",

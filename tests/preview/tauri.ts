@@ -16,7 +16,11 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
     case "save_settings": settings = args?.settings as Settings; return "";
     case "get_status": return status;
     case "get_update_state": return { current: "0.4.1", phase: "latest", version: null, notes: null, progress: null, error: null };
-    case "list_clips": case "list_mics": return [];
+    case "list_clips": return [];
+    case "list_mics": return [
+      { id: "mic-usb", name: "Mikrofon (fifine Microphone)", isDefault: true },
+      { id: "mic-headset", name: "Fejhallgató mikrofonja (SteelSeries Arctis Nova 5)", isDefault: false },
+    ];
     case "list_monitors": return [
       { deviceId: "display-primary", name: "Dell U2723QE", width: 3840, height: 2160, primary: true },
       { deviceId: "display-secondary", name: "Dell U2415", width: 1920, height: 1200, primary: false },

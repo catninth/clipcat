@@ -94,6 +94,7 @@
   "settings.mic.always": "Always on",
   "settings.micDevice.label": "Microphone device",
   "settings.micDevice.default": "System default",
+  "settings.micDevice.defaultName": "{name} (default)",
   "settings.micDevice.unavailable": "Unavailable device",
   "settings.pttKey.label": "Push-to-talk key",
   "settings.pttKey.hint": "A keyboard key or middle/side mouse button.",

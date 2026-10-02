@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SettingsView } from "./SettingsView";
 import { invoke } from "../lib/tauri";
-import type { Monitor, Settings } from "../lib/tauri";
+import type { Mic, Monitor, Settings } from "../lib/tauri";
 import { i18n, useLocale } from "../lib/i18n";
 import hu from "../../locales/hu.json";
 import en from "../../locales/en-US.json";
@@ -83,6 +83,43 @@ const monitors: Monitor[] = [
   { deviceId: "display-primary", name: "Main display", width: 3840, height: 2160, primary: true },
   { deviceId: "display-secondary", name: "Side display", width: 2560, height: 1440, primary: false },
 ];
+
+it.each([
+  { language: "hu" as const, messages: hu, defaultName: "USB microphone (alapértelmezett)" },
+  { language: "en-US" as const, messages: en, defaultName: "USB microphone (default)" },
+])("labels the system-default microphone in $language and saves its device ID", async ({ language, messages, defaultName }) => {
+  i18n.lang = language;
+  i18n.messages = messages;
+  const initial: Settings = { ...settings, language, micMode: "always", micDevice: "headset-mic" };
+  let saved = initial;
+  const mics: Mic[] = [
+    { id: "headset-mic", name: "Headset microphone", isDefault: false },
+    { id: "usb-mic", name: "USB microphone", isDefault: true },
+  ];
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_mics") return mics as never;
+    if (command === "list_monitors") return [] as never;
+    if (command === "save_settings") { saved = (args as { settings: Settings }).settings; return "" as never; }
+    if (command === "get_settings") return saved as never;
+    if (command === "get_locale") return { lang: language, messages } as never;
+    return false as never;
+  });
+  const onSaved = vi.fn();
+  render(<SettingsView settings={initial} onSaved={onSaved} onStatus={vi.fn()} update={null} />);
+  const microphone = await screen.findByRole("combobox", { name: messages["settings.micDevice.label"] });
+  expect(microphone.textContent).toBe("Headset microphone");
+  fireEvent.click(microphone);
+  expect(screen.getByRole("option", { name: "Headset microphone", selected: true })).toBeTruthy();
+  expect(screen.getByRole("option", { name: messages["settings.micDevice.default"], selected: false })).toBeTruthy();
+  fireEvent.click(screen.getByRole("option", { name: defaultName, selected: false }));
+  expect(microphone.textContent).toBe(defaultName);
+  fireEvent.click(screen.getByRole("button", { name: messages["settings.save"] }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ micDevice: "usb-mic" })));
+
+  chooseOption(microphone, messages["settings.micDevice.default"]);
+  fireEvent.click(screen.getByRole("button", { name: messages["settings.save"] }));
+  await waitFor(() => expect(onSaved).toHaveBeenLastCalledWith(expect.objectContaining({ micDevice: "default" })));
+});
 
 function mockCaptureSettings(initial: Settings, listMonitors: () => Promise<Monitor[]> = async () => monitors) {
   i18n.lang = "en-US";
