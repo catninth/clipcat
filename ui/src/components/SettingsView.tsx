@@ -349,7 +349,7 @@ function SettingsFrame({ children }: { children?: ReactNode }) {
       <div className="mx-auto flex w-full max-w-[864px] items-baseline gap-3 px-8 pt-[26px] pb-3.5">
         <h1 className="font-display text-[26px] leading-[1.15] font-bold tracking-[-.02em]">{t("settings.title")}</h1>
       </div>
-      <div className="scroll-area flex-1 px-8 pt-1 pb-8">{children}</div>
+      <div className="scroll-area flex-1 px-8 pt-4 pb-8">{children}</div>
     </section>
   );
 }
