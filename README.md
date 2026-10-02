@@ -34,7 +34,33 @@ ShadowPlay-style replay recorder with an embedded OBS capture engine, a clip gal
 
 Screenshots show the English UI with sample clips and simulated capture state. See the gallery for all 28 images and capture details.
 
+## Recording controls
+
+Recording settings accept custom replay lengths (10–1200 seconds) and integer bitrates
+(5 Mbps up to the existing frame-rate limit), alongside the sliders.
+
+**Pause replay when AFK** is off by default, including for existing installations.
+Choose 10 or 30 minutes, 1, 2, or 3 hours, or enter a custom timeout of 10–86400 seconds.
+When no keyboard or mouse input is detected for that long, ClipCat pauses replay.
+Manual recordings continue with video and audio unaffected. Input resumes replay only
+if it was enabled before the pause. Turning the AFK setting off also releases the pause.
+Replay saves already in progress finish before the replay buffer is paused.
+Idle detection uses Windows session input or the X11 ScreenSaver extension on Linux;
+Wayland idle detection is unavailable. Controller-only input does not reset the timeout.
+
 ## Language and Info
+
+The **Capture mode** dropdown offers **Monitor capture** and **Automatic game capture**.
+Monitor recording always captures the selected display, including games and other apps. Select
+the primary monitor automatically or choose a connected monitor; unavailable selections fall
+back to the primary display. Replay clips use the application active when Save is pressed for
+their filename and folder. Manual recordings use the application active when recording stops.
+Known games keep their friendly names; other apps use their executable names for stable groups.
+Changing the mode or monitor clears the replay buffer and is blocked during manual recording.
+On Wayland, the system screen-sharing portal controls display selection.
+
+Automatic game capture preserves the previous game-detection behavior and saved desktop fallback
+preference. Existing installations keep this mode; new installations start in monitor mode.
 
 The **Language** field in Settings switches between Hungarian and English US. On first launch,
 the Windows display language determines the default: Hungarian for Hungarian Windows, English US otherwise.

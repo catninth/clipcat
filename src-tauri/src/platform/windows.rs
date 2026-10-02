@@ -3,6 +3,7 @@
 
 use super::{Monitor, WindowInfo};
 use crate::logfile;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
@@ -11,16 +12,20 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::WebviewWindow;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
-use windows_sys::Win32::Foundation::{CloseHandle, HWND, RECT};
+use windows_sys::Win32::Devices::Display::{
+    DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+    DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
+};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplaySettingsW, GetMonitorInfoW, MonitorFromWindow, DEVMODEW, DISPLAY_DEVICEW, HMONITOR, MONITORINFO,
     MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows_sys::Win32::System::LibraryLoader::{AddDllDirectory, SetDllDirectoryW};
-use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+use windows_sys::Win32::System::SystemInformation::{GetLocalTime, GetTickCount};
 use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO};
 use windows_sys::Win32::UI::Shell::{SHFileOperationW, SHFILEOPSTRUCTW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
@@ -30,6 +35,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 const DISPLAY_DEVICE_PRIMARY_DEVICE: u32 = 0x4;
+const DISPLAY_DEVICE_ATTACHED_TO_DESKTOP: u32 = 0x1;
+const DISPLAY_DEVICE_ACTIVE: u32 = 0x1;
+const DISPLAY_DEVICE_MIRRORING_DRIVER: u32 = 0x8;
 const EDD_GET_DEVICE_INTERFACE_NAME: u32 = 0x1;
 const ENUM_CURRENT_SETTINGS: u32 = 0xFFFF_FFFF;
 const FO_DELETE: u32 = 0x3;
@@ -52,38 +60,131 @@ fn from_wide(buf: &[u16]) -> String {
     String::from_utf16_lossy(&buf[..len])
 }
 
-pub fn primary_monitor() -> Option<Monitor> {
+/// CCD exposes the monitor's model name even when its driver is "Generic PnP Monitor".
+/// Match by device interface path so adapter ordering and cloned displays cannot swap names.
+fn monitor_model_names() -> HashMap<String, String> {
+    unsafe {
+        // A display can be connected between sizing and querying. Retry with fresh sizes,
+        // but keep discovery bounded if the topology keeps changing.
+        for _ in 0..3 {
+            let (mut path_count, mut mode_count) = (0, 0);
+            if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut path_count, &mut mode_count) != ERROR_SUCCESS {
+                break;
+            }
+            let mut paths: Vec<DISPLAYCONFIG_PATH_INFO> = vec![zeroed(); path_count as usize];
+            let mut modes: Vec<DISPLAYCONFIG_MODE_INFO> = vec![zeroed(); mode_count as usize];
+            let result = QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &mut path_count,
+                paths.as_mut_ptr(),
+                &mut mode_count,
+                modes.as_mut_ptr(),
+                std::ptr::null_mut(),
+            );
+            if result == ERROR_INSUFFICIENT_BUFFER {
+                continue;
+            }
+            if result != ERROR_SUCCESS {
+                break;
+            }
+
+            let mut names = HashMap::new();
+            for path in paths.iter().take(path_count as usize) {
+                let mut target: DISPLAYCONFIG_TARGET_DEVICE_NAME = zeroed();
+                target.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+                target.header.size = size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
+                target.header.adapterId = path.targetInfo.adapterId;
+                target.header.id = path.targetInfo.id;
+                if DisplayConfigGetDeviceInfo(&mut target.header) != ERROR_SUCCESS as i32 {
+                    continue;
+                }
+                let device_id = from_wide(&target.monitorDevicePath);
+                let model = from_wide(&target.monitorFriendlyDeviceName);
+                if !device_id.is_empty() && !model.trim().is_empty() {
+                    names.insert(device_id.to_ascii_lowercase(), model);
+                }
+            }
+            return names;
+        }
+    }
+    HashMap::new()
+}
+
+fn monitor_name(models: &HashMap<String, String>, device_id: &str, driver_name: &str, display_name: &str) -> String {
+    let model = models
+        .get(&device_id.to_ascii_lowercase())
+        .map(String::as_str)
+        .into_iter()
+        .chain([driver_name])
+        .map(str::trim)
+        .find(|name| {
+            !name.is_empty()
+                && !["Generic PnP Monitor", "Generic Non-PnP Monitor", "Generic Monitor", "Default Monitor"]
+                    .iter()
+                    .any(|generic| name.eq_ignore_ascii_case(generic))
+        });
+    match model {
+        Some(model) => format!("{model} ({display_name})"),
+        None => format!("Monitor {}", display_name.strip_prefix("DISPLAY").unwrap_or(display_name)),
+    }
+}
+
+pub fn monitors() -> Vec<Monitor> {
+    let mut displays = Vec::new();
+    let models = monitor_model_names();
     unsafe {
         let mut index = 0;
         loop {
             let mut adapter: DISPLAY_DEVICEW = zeroed();
             adapter.cb = size_of::<DISPLAY_DEVICEW>() as u32;
             if EnumDisplayDevicesW(std::ptr::null(), index, &mut adapter, 0) == 0 {
-                return None;
+                break;
             }
             index += 1;
-            if adapter.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE == 0 {
+            if adapter.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP == 0
+                || adapter.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER != 0
+            {
                 continue;
             }
 
             let mut mode: DEVMODEW = zeroed();
             mode.dmSize = size_of::<DEVMODEW>() as u16;
-            let (width, height) = if EnumDisplaySettingsW(adapter.DeviceName.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode) != 0 {
-                (mode.dmPelsWidth, mode.dmPelsHeight)
-            } else {
-                (1920, 1080)
-            };
+            if EnumDisplaySettingsW(adapter.DeviceName.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode) == 0
+                || mode.dmPelsWidth == 0
+                || mode.dmPelsHeight == 0
+            {
+                continue;
+            }
 
-            let mut monitor: DISPLAY_DEVICEW = zeroed();
-            monitor.cb = size_of::<DISPLAY_DEVICEW>() as u32;
-            let device_id = if EnumDisplayDevicesW(adapter.DeviceName.as_ptr(), 0, &mut monitor, EDD_GET_DEVICE_INTERFACE_NAME) != 0 {
-                from_wide(&monitor.DeviceID)
-            } else {
-                String::new()
-            };
-            return Some(Monitor { device_id, width, height });
+            let adapter_name = from_wide(&adapter.DeviceName);
+            let display_name = adapter_name.trim_start_matches(r"\\.\");
+            let mut monitor_index = 0;
+            loop {
+                let mut monitor: DISPLAY_DEVICEW = zeroed();
+                monitor.cb = size_of::<DISPLAY_DEVICEW>() as u32;
+                if EnumDisplayDevicesW(adapter.DeviceName.as_ptr(), monitor_index, &mut monitor, EDD_GET_DEVICE_INTERFACE_NAME) == 0 {
+                    break;
+                }
+                monitor_index += 1;
+                if monitor.StateFlags & DISPLAY_DEVICE_ACTIVE == 0 {
+                    continue;
+                }
+                let device_id = from_wide(&monitor.DeviceID);
+                if device_id.is_empty() || displays.iter().any(|display: &Monitor| display.device_id.eq_ignore_ascii_case(&device_id)) {
+                    continue;
+                }
+                let name = monitor_name(&models, &device_id, &from_wide(&monitor.DeviceString), display_name);
+                displays.push(Monitor {
+                    device_id,
+                    name,
+                    width: mode.dmPelsWidth,
+                    height: mode.dmPelsHeight,
+                    primary: adapter.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE != 0,
+                });
+            }
         }
     }
+    displays
 }
 
 unsafe fn monitor_rect(monitor: HMONITOR) -> Option<RECT> {
@@ -147,6 +248,24 @@ pub fn foreground_window() -> Option<WindowInfo> {
             fullscreen: fullscreen_monitor(hwnd).is_some(),
         })
     }
+}
+
+/// Time since keyboard or mouse input anywhere in the current Windows session.
+pub fn idle_seconds() -> Option<u64> {
+    unsafe {
+        let mut info = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+        if GetLastInputInfo(&mut info) == 0 {
+            return None;
+        }
+        idle_seconds_from_ticks(GetTickCount(), info.dwTime)
+    }
+}
+
+fn idle_seconds_from_ticks(now: u32, last_input: u32) -> Option<u64> {
+    // Both counters wrap after 49.7 days. Synthetic input can also carry a future
+    // timestamp: reject ambiguous differences instead of treating those as AFK.
+    let elapsed = now.wrapping_sub(last_input);
+    (elapsed <= i32::MAX as u32).then_some(u64::from(elapsed) / 1000)
 }
 
 /// Whether a key or mouse button is pressed (virtual-key code), regardless of the active window.
@@ -456,6 +575,22 @@ fn cleanup_legacy(state_dir: &std::path::Path, config_dir: &std::path::Path) {
     }
     let _ = std::fs::remove_file(config_dir.join("shadowplay.lua"));
     logfile::write("Removed remnants of the legacy separate-OBS-process setup");
+}
+
+#[cfg(test)]
+mod idle_tests {
+    #[test]
+    fn measures_idle_time_across_tick_counter_wrap() {
+        assert_eq!(super::idle_seconds_from_ticks(10_999, 10_000), Some(0));
+        assert_eq!(super::idle_seconds_from_ticks(15_000, 10_000), Some(5));
+        assert_eq!(super::idle_seconds_from_ticks(999, u32::MAX - 1000), Some(2));
+    }
+
+    #[test]
+    fn future_input_timestamps_do_not_report_long_idle_time() {
+        assert_eq!(super::idle_seconds_from_ticks(10_000, 10_001), None);
+        assert_eq!(super::idle_seconds_from_ticks(u32::MAX, 1), None);
+    }
 }
 
 #[cfg(test)]

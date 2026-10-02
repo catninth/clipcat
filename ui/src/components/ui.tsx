@@ -1,5 +1,7 @@
-import type { ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode } from "react";
 import { cx } from "../lib/format";
+
+export { Select } from "./Select";
 
 // ---------- Gombok ----------
 
@@ -63,24 +65,6 @@ export function TextInput({ wide, className, ...props }: InputHTMLAttributes<HTM
       type="text"
       spellCheck={false}
       className={cx(FIELD, "select-text focus:shadow-[inset_0_0_0_1px_var(--color-accent),0_0_0_3px_var(--color-accent-soft)] focus:outline-none", wide && "min-w-[300px]", className)}
-      {...props}
-    />
-  );
-}
-
-const CHEVRON = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%239d9da6' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 5l2.5-2.5L8.5 5M3.5 7.5L6 10l2.5-2.5'/%3E%3C/svg%3E")`;
-
-export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <select
-      className={cx(
-        FIELD,
-        "max-w-[340px] cursor-pointer appearance-none text-ellipsis bg-size-[12px] bg-position-[right_9px_center] bg-no-repeat pr-[30px]",
-        "[&>option]:bg-panel-2 [&>option]:text-fg",
-        "focus-visible:shadow-[inset_0_0_0_1px_var(--color-accent),0_0_0_3px_var(--color-accent-soft)] focus-visible:outline-none",
-        className,
-      )}
-      style={{ backgroundImage: CHEVRON }}
       {...props}
     />
   );

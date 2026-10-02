@@ -5,8 +5,8 @@ import type { Captured } from "../lib/capture";
 import { cx, formatDuration, prettyHotkey } from "../lib/format";
 import { loadLocale, t } from "../lib/i18n";
 import { invoke } from "../lib/tauri";
-import type { HotkeyField, Mic, Settings, Status, UpdateState } from "../lib/tauri";
-import { Button, Card, Keycap, Range, Row, Select, Switch, TextInput, Value } from "./ui";
+import type { HotkeyField, Mic, Monitor, Settings, Status, UpdateState } from "../lib/tauri";
+import { Button, Card, Keycap, Range, Row, Select, Switch, TextInput } from "./ui";
 import { installUpdate, isInstallable, updateProgressText } from "./updates";
 import { GithubIcon } from "./icons";
 
@@ -15,19 +15,33 @@ import { GithubIcon } from "./icons";
 const BITRATE_1080P: Record<number, number> = { 30: 20, 60: 30, 120: 45, 144: 50 };
 const MAX_BITRATE: Record<number, number> = { 30: 80, 60: 100, 120: 130, 144: 150 };
 const MIN_BITRATE = 5;
+const MIN_BUFFER_SECONDS = 10;
+const MAX_BUFFER_SECONDS = 1200;
+const MIN_AFK_SECONDS = 10;
+const MAX_AFK_SECONDS = 86400;
+const AFK_PRESETS = [600, 1800, 3600, 7200, 10800];
+
+const integerInRange = (value: number, min: number, max: number) => Number.isInteger(value) && value >= min && value <= max;
 
 const AUDIO_MBPS = 0.192;
 const DISK_DAILY_HOURS = 4;
 
-function outputPixels(resolution: string) {
+function outputPixels(resolution: string, monitor?: Monitor) {
   const [w, h] = resolution === "native"
-    ? [screen.width * devicePixelRatio, screen.height * devicePixelRatio]
+    ? monitor ? [monitor.width, monitor.height] : [screen.width * devicePixelRatio, screen.height * devicePixelRatio]
     : resolution.split("x").map(Number);
   return w * h;
 }
 
-function recommendedBitrate({ fps, resolution, codec }: Pick<Settings, "fps" | "resolution" | "codec">) {
-  const pixelFactor = outputPixels(resolution) / (1920 * 1080);
+function captureMonitor(settings: Settings, monitors: Monitor[]) {
+  if (settings.captureMode !== "monitor") return undefined;
+  return monitors.find((monitor) => monitor.deviceId === settings.monitorId)
+    ?? monitors.find((monitor) => monitor.primary)
+    ?? monitors[0];
+}
+
+function recommendedBitrate({ fps, resolution, codec }: Pick<Settings, "fps" | "resolution" | "codec">, monitor?: Monitor) {
+  const pixelFactor = outputPixels(resolution, monitor) / (1920 * 1080);
   const value = BITRATE_1080P[fps] * pixelFactor * (codec === "hevc" ? 0.7 : 1);
   return Math.min(MAX_BITRATE[fps], Math.max(MIN_BITRATE, Math.round(value / 5) * 5));
 }
@@ -46,14 +60,20 @@ interface Props {
 
 export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
   const [draft, setDraft] = useState<Settings | null>(null);
+  const [customAfk, setCustomAfk] = useState(settings.afkTimeoutSeconds > 0 && !AFK_PRESETS.includes(settings.afkTimeoutSeconds));
   const [mics, setMics] = useState<Mic[]>([]);
+  const [monitors, setMonitors] = useState<Monitor[]>([]);
+  const [monitorsLoading, setMonitorsLoading] = useState(true);
+  const [monitorsFailed, setMonitorsFailed] = useState(false);
   const [diskAvailable, setDiskAvailable] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
   const messageTimer = useRef(0);
   const [budget, setBudget] = useState<{ maxMb: number; seconds: number } | null>(null);
   useEffect(() => {
-    if (!draft || draft.bufferStorage !== "memory") return;
+    if (!draft || draft.bufferStorage !== "memory"
+      || !integerInRange(draft.bufferSeconds, MIN_BUFFER_SECONDS, MAX_BUFFER_SECONDS)
+      || !integerInRange(draft.bitrateMbps, MIN_BITRATE, MAX_BITRATE[draft.fps])) return;
     let alive = true;
     invoke<{ maxMb: number; seconds: number }>("buffer_budget", { seconds: draft.bufferSeconds, bitrateMbps: draft.bitrateMbps })
       .then((value) => { if (alive) setBudget(value); }).catch(() => {});
@@ -70,7 +90,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
       if (!alive) return;
       setMics(mics);
       setDiskAvailable(disk);
-      // The slider clamps the saved value to the range for the current FPS
+      // Keep the saved bitrate within the supported range for the current FPS.
       const max = MAX_BITRATE[settings.fps] ?? MAX_BITRATE[60];
       setDraft({ ...settings, bitrateMbps: Math.min(max, Math.max(MIN_BITRATE, settings.bitrateMbps)) });
     });
@@ -80,7 +100,24 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
 
   useEffect(() => () => clearTimeout(messageTimer.current), []);
 
-  const dirty = !!draft && JSON.stringify(normalize(draft)) !== JSON.stringify(settings);
+  useEffect(() => {
+    let alive = true;
+    invoke<Monitor[]>("list_monitors").then((value) => {
+      if (alive) setMonitors(value);
+    }).catch(() => {
+      if (alive) setMonitorsFailed(true);
+    }).finally(() => {
+      if (alive) setMonitorsLoading(false);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  const bufferValid = !!draft && integerInRange(draft.bufferSeconds, MIN_BUFFER_SECONDS, MAX_BUFFER_SECONDS);
+  const bitrateValid = !!draft && integerInRange(draft.bitrateMbps, MIN_BITRATE, MAX_BITRATE[draft.fps]);
+  const afkValid = !!draft && ((!customAfk && draft.afkTimeoutSeconds === 0)
+    || integerInRange(draft.afkTimeoutSeconds, MIN_AFK_SECONDS, MAX_AFK_SECONDS));
+  const valid = bufferValid && bitrateValid && afkValid;
+  const dirty = !!draft && (JSON.stringify(normalize(draft)) !== JSON.stringify(settings) || !valid);
 
   // Clear the "Saved" confirmation when another change is made
   useEffect(() => {
@@ -95,7 +132,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
   const setQuality = (patch: Partial<Pick<Settings, "fps" | "resolution" | "codec">>) =>
     setDraft((d) => {
       const next = { ...d!, ...patch };
-      return { ...next, bitrateMbps: recommendedBitrate(next) };
+      return { ...next, bitrateMbps: recommendedBitrate(next, captureMonitor(next, monitors)) };
     });
 
   const pickFolder = async (field: "outputDir" | "bufferDir") => {
@@ -105,7 +142,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (isCapturing() || saving || !draft) return;
+    if (isCapturing() || saving || !draft || !valid) return;
     setSaving(true);
     setMessage({ text: t("settings.saving") });
     try {
@@ -135,6 +172,9 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
   const micOptions: [string, string][] = [["default", t("settings.micDevice.default")], ...mics.map((m): [string, string] => [m.id, m.name])];
   // Keep the saved device selectable even if it is currently disconnected
   if (!micOptions.some(([id]) => id === draft.micDevice)) micOptions.push([draft.micDevice, t("settings.micDevice.unavailable")]);
+
+  const monitorMissing = !!draft.monitorId && !monitors.some((monitor) => monitor.deviceId === draft.monitorId);
+  const monitorUnavailable = monitorMissing && !monitorsLoading && !monitorsFailed;
 
   const hotkeyCapture = (field: HotkeyField) => (captured: Captured) => {
     if (!captured.keyboard) return;
@@ -188,20 +228,25 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
             <TextInput wide readOnly aria-label={t("settings.outputDir.label")} value={draft.outputDir} />
             <Button onClick={() => pickFolder("outputDir")}>{t("settings.browse")}</Button>
           </Row>
-          <Row label={t("settings.buffer.label")} hints={[t("settings.buffer.hint")]}>
-            <Range min={10} max={1200} step={10} value={buffer} onChange={(e) => set("bufferSeconds", Number(e.target.value))} />
-            <Value>{formatDuration(buffer)}</Value>
+          <Row label={t("settings.buffer.label")} hints={[
+            t("settings.buffer.hint"),
+            !bufferValid && { text: t("validate.buffer", { min: MIN_BUFFER_SECONDS, max: MAX_BUFFER_SECONDS }), tone: "error" },
+          ]}>
+            <Range aria-label={t("settings.buffer.label")} min={MIN_BUFFER_SECONDS} max={MAX_BUFFER_SECONDS} step={1}
+              value={Math.min(MAX_BUFFER_SECONDS, Math.max(MIN_BUFFER_SECONDS, buffer))} onChange={(e) => set("bufferSeconds", Number(e.target.value))} />
+            <NumberInput label={t("settings.buffer.input")} unit={t("settings.secondsUnit")} min={MIN_BUFFER_SECONDS} max={MAX_BUFFER_SECONDS}
+              value={buffer} valid={bufferValid} onChange={(value) => set("bufferSeconds", value)} />
           </Row>
           <Row label={t("settings.storage.label")} hints={[
             t("settings.storage.hint", { size: clipSize }),
-            draft.bufferStorage === "memory" && budget && t("settings.memoryBudget", { size: budget.maxMb, duration: formatDuration(budget.seconds) }),
+            draft.bufferStorage === "memory" && bufferValid && bitrateValid && budget && t("settings.memoryBudget", { size: budget.maxMb, duration: formatDuration(budget.seconds) }),
           ]}>
-            <Select value={draft.bufferStorage} onChange={(e) => set("bufferStorage", e.target.value as Settings["bufferStorage"])}>
-              <option value="memory">{t("settings.storage.memory")}</option>
-              <option value="disk" disabled={!diskAvailable}>
-                {t(diskAvailable ? "settings.storage.disk" : "settings.storage.diskMissing")}
-              </option>
-            </Select>
+            <Select aria-label={t("settings.storage.label")} value={draft.bufferStorage}
+              onValueChange={(value) => set("bufferStorage", value as Settings["bufferStorage"])}
+              options={[
+                { value: "memory", label: t("settings.storage.memory") },
+                { value: "disk", label: t(diskAvailable ? "settings.storage.disk" : "settings.storage.diskMissing"), disabled: !diskAvailable },
+              ]} />
           </Row>
           {draft.bufferStorage === "disk" && (
             <Row
@@ -221,53 +266,112 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
             </Row>
           )}
           <Row label={t("settings.resolution.label")}>
-            <Select value={draft.resolution} onChange={(e) => setQuality({ resolution: e.target.value })}>
-              <option value="native">{t("settings.resolution.native")}</option>
-              <option value="2560x1440">1440p (2560×1440)</option>
-              <option value="1920x1080">1080p (1920×1080)</option>
-              <option value="1280x720">720p (1280×720)</option>
-            </Select>
+            <Select aria-label={t("settings.resolution.label")} value={draft.resolution}
+              onValueChange={(value) => setQuality({ resolution: value })}
+              options={[
+                { value: "native", label: t("settings.resolution.native") },
+                { value: "2560x1440", label: "1440p (2560×1440)" },
+                { value: "1920x1080", label: "1080p (1920×1080)" },
+                { value: "1280x720", label: "720p (1280×720)" },
+              ]} />
           </Row>
           <Row label={t("settings.fps.label")}>
-            <Select value={fps} onChange={(e) => setQuality({ fps: Number(e.target.value) })}>
-              {[30, 60, 120, 144].map((v) => <option key={v} value={v}>{v} FPS</option>)}
-            </Select>
+            <Select aria-label={t("settings.fps.label")} value={fps} onValueChange={(value) => setQuality({ fps: Number(value) })}
+              options={[30, 60, 120, 144].map((value) => ({ value, label: `${value} FPS` }))} />
           </Row>
           <Row
             label={t("settings.bitrate.label")}
             hints={[
               t("settings.bitrate.sizeHint", { duration: formatDuration(buffer), size: clipSize }),
-              t("settings.bitrate.recommended", { value: recommendedBitrate(draft), max: MAX_BITRATE[fps] }),
+              t("settings.bitrate.recommended", { value: recommendedBitrate(draft, captureMonitor(draft, monitors)), max: MAX_BITRATE[fps] }),
+              !bitrateValid && { text: t("validate.bitrate", { fps, min: MIN_BITRATE, max: MAX_BITRATE[fps] }), tone: "error" },
             ]}
           >
             {/* The upper bound depends on FPS */}
-            <Range min={MIN_BITRATE} max={MAX_BITRATE[fps]} step={5} value={bitrate} onChange={(e) => set("bitrateMbps", Number(e.target.value))} />
-            <Value>{bitrate} Mbps</Value>
+            <Range aria-label={t("settings.bitrate.label")} min={MIN_BITRATE} max={MAX_BITRATE[fps]} step={1}
+              value={Math.min(MAX_BITRATE[fps], Math.max(MIN_BITRATE, bitrate))} onChange={(e) => set("bitrateMbps", Number(e.target.value))} />
+            <NumberInput label={t("settings.bitrate.input")} unit="Mbps" min={MIN_BITRATE} max={MAX_BITRATE[fps]}
+              value={bitrate} valid={bitrateValid} onChange={(value) => set("bitrateMbps", value)} />
           </Row>
           <Row label={t("settings.codec.label")}>
-            <Select value={draft.codec} onChange={(e) => setQuality({ codec: e.target.value as Settings["codec"] })}>
-              <option value="h264">{t("settings.codec.h264")}</option>
-              <option value="hevc">{t("settings.codec.hevc")}</option>
-            </Select>
+            <Select aria-label={t("settings.codec.label")} value={draft.codec}
+              onValueChange={(value) => setQuality({ codec: value as Settings["codec"] })}
+              options={[
+                { value: "h264", label: t("settings.codec.h264") },
+                { value: "hevc", label: t("settings.codec.hevc") },
+              ]} />
           </Row>
-          <Row label={t("settings.captureDesktop.label")} hints={[t("settings.captureDesktop.hint")]}>
-            <Switch checked={draft.captureDesktop} onChange={(e) => set("captureDesktop", e.target.checked)} />
+          <Row label={t("settings.captureMode.label")} hints={[
+            t(draft.captureMode === "monitor" ? "settings.captureMode.monitorHint"
+              : draft.captureDesktop ? "settings.captureMode.gameDesktopHint" : "settings.captureMode.gameHint"),
+          ]}>
+            <Select aria-label={t("settings.captureMode.label")} value={draft.captureMode}
+              onValueChange={(value) => set("captureMode", value as Settings["captureMode"])}
+              options={[
+                { value: "monitor", label: t("settings.captureMode.monitor") },
+                { value: "game", label: t("settings.captureMode.game") },
+              ]} />
+          </Row>
+          {draft.captureMode === "monitor" && (
+            <Row label={t("settings.monitor.label")} hints={[
+              !draft.monitorId && t("settings.monitor.primaryHint"),
+              monitorsLoading && t("settings.monitor.loading"),
+              monitorsFailed && { text: t("settings.monitor.loadFailed"), tone: "error" },
+              monitorUnavailable && { text: t("settings.monitor.unavailableHint"), tone: "warn" },
+            ]}>
+              <Select aria-label={t("settings.monitor.label")} value={draft.monitorId} disabled={monitorsLoading}
+                onValueChange={(value) => set("monitorId", value)}
+                options={[
+                  { value: "", label: t("settings.monitor.primary") },
+                  ...monitors.map((monitor) => ({
+                    value: monitor.deviceId,
+                    label: `${monitor.name} (${monitor.width} × ${monitor.height})${monitor.primary ? ` · ${t("settings.monitor.primaryLabel")}` : ""}`,
+                  })),
+                  ...(monitorMissing ? [{
+                    value: draft.monitorId,
+                    label: t(monitorUnavailable ? "settings.monitor.unavailable" : "settings.monitor.configured"),
+                  }] : []),
+                ]} />
+            </Row>
+          )}
+        </Card>
+
+        <Card title={t("settings.afkTimeout.title")}>
+          <Row label={t("settings.afkTimeout.label")} hints={[
+            t("settings.afkTimeout.hint"),
+            !afkValid && { text: t("validate.afkTimeout", { min: MIN_AFK_SECONDS, max: MAX_AFK_SECONDS }), tone: "error" },
+          ]}>
+            <Select aria-label={t("settings.afkTimeout.label")} value={customAfk ? "custom" : String(draft.afkTimeoutSeconds)} onValueChange={(value) => {
+              const custom = value === "custom";
+              setCustomAfk(custom);
+              set("afkTimeoutSeconds", custom ? draft.afkTimeoutSeconds || 600 : Number(value));
+            }} options={[
+              { value: "0", label: t("settings.afkTimeout.off") },
+              ...AFK_PRESETS.map((seconds) => ({
+                value: seconds,
+                label: t(seconds < 3600 ? "settings.afkTimeout.minutes" : "settings.afkTimeout.hours", { value: seconds / (seconds < 3600 ? 60 : 3600) }),
+              })),
+              { value: "custom", label: t("settings.custom") },
+            ]} />
+            {customAfk && <NumberInput label={t("settings.afkTimeout.input")} unit={t("settings.secondsUnit")} min={MIN_AFK_SECONDS} max={MAX_AFK_SECONDS}
+              value={draft.afkTimeoutSeconds} valid={afkValid} onChange={(value) => set("afkTimeoutSeconds", value)} />}
           </Row>
         </Card>
 
         <Card title={t("settings.audio.title")}>
           <Row label={t("settings.mic.label")}>
-            <Select value={draft.micMode} onChange={(e) => set("micMode", e.target.value as Settings["micMode"])}>
-              <option value="off">{t("settings.mic.off")}</option>
-              <option value="ptt">{t("settings.mic.ptt")}</option>
-              <option value="always">{t("settings.mic.always")}</option>
-            </Select>
+            <Select aria-label={t("settings.mic.label")} value={draft.micMode}
+              onValueChange={(value) => set("micMode", value as Settings["micMode"])}
+              options={[
+                { value: "off", label: t("settings.mic.off") },
+                { value: "ptt", label: t("settings.mic.ptt") },
+                { value: "always", label: t("settings.mic.always") },
+              ]} />
           </Row>
           {draft.micMode !== "off" && (
             <Row label={t("settings.micDevice.label")}>
-              <Select value={draft.micDevice} onChange={(e) => set("micDevice", e.target.value)}>
-                {micOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-              </Select>
+              <Select aria-label={t("settings.micDevice.label")} value={draft.micDevice} onValueChange={(value) => set("micDevice", value)}
+                options={micOptions.map(([value, label]) => ({ value, label }))} />
             </Row>
           )}
           {draft.micMode === "ptt" && (
@@ -287,10 +391,9 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
 
         <Card title={t("settings.system.title")}>
           <Row label={t("settings.language.label")} hints={[t("settings.language.hint")]}>
-            <Select aria-label={t("settings.language.label")} value={draft.language} onChange={(e) => set("language", e.target.value as Settings["language"])}>
-              <option value="hu">Magyar</option>
-              <option value="en-US">English US</option>
-            </Select>
+            <Select aria-label={t("settings.language.label")} value={draft.language}
+              onValueChange={(value) => set("language", value as Settings["language"])}
+              options={[{ value: "hu", label: "Magyar" }, { value: "en-US", label: "English US" }]} />
           </Row>
           {systemSwitches.map(([field, label, hint]) => (
             <Row key={field} label={t(label)} hints={[hint && t(hint)]}>
@@ -334,11 +437,23 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
                 {message.text}
               </span>
             )}
-            <Button type="submit" variant="primary" disabled={!dirty || saving}>{t("settings.save")}</Button>
+            <Button type="submit" variant="primary" disabled={!dirty || !valid || saving}>{t("settings.save")}</Button>
           </div>
         )}
       </form>
     </SettingsFrame>
+  );
+}
+
+function NumberInput({ label, unit, min, max, value, valid, onChange }: {
+  label: string; unit: string; min: number; max: number; value: number; valid: boolean; onChange: (value: number) => void;
+}) {
+  return (
+    <label className="flex items-center gap-1.5 whitespace-nowrap tabular">
+      <TextInput type="number" className="w-[84px] text-right" style={{ minWidth: 0 }} aria-label={label} aria-invalid={!valid}
+        min={min} max={max} step={1} required value={value || ""} onChange={(e) => onChange(Number(e.target.value))} />
+      <span className="text-muted">{unit}</span>
+    </label>
   );
 }
 

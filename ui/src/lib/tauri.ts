@@ -16,7 +16,10 @@ export interface Settings {
   fps: number;
   bitrateMbps: number;
   codec: "h264" | "hevc";
+  captureMode: "monitor" | "game";
+  monitorId: string;
   captureDesktop: boolean;
+  afkTimeoutSeconds: number;
   micMode: "off" | "ptt" | "always";
   micDevice: string;
   micPttVk: number;
@@ -42,6 +45,7 @@ export interface Status {
   obsRunning: boolean;
   replayEnabled: boolean;
   replayActive: boolean;
+  afkPaused: boolean;
   bufferSince: number;
   recording: boolean;
   recordingSince: number;
@@ -59,6 +63,14 @@ export interface Clip {
 export interface Mic {
   id: string;
   name: string;
+}
+
+export interface Monitor {
+  deviceId: string;
+  name: string;
+  width: number;
+  height: number;
+  primary: boolean;
 }
 
 export interface UpdateState {

@@ -97,6 +97,7 @@ function useNow() {
 function statusText(status: Status | null): [string, string] {
   if (!status) return [t("status.connecting"), ""];
   if (status.replayActive) return [t("status.replayRunning"), ""];
+  if (status.afkPaused) return [t("status.afkPaused"), t("status.afkPausedHint")];
   if (!status.obsInstalled) return [t("status.engineMissing"), t("status.engineMissingHint")];
   if (!status.obsRunning) return [t("status.captureNotStarted"), status.error || t("status.starting")];
   if (!status.replayEnabled) return [t("status.replayDisabled"), t("status.replayDisabledHint")];

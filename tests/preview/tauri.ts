@@ -4,11 +4,11 @@ import en from "../../ui/locales/en-US.json";
 let settings: Settings = {
   language: "hu", outputDir: "C:/Users/Ris/Videos/ClipCat", bufferDir: "C:/Users/Ris/AppData/Local/ClipCat/buffer",
   bufferSeconds: 150, bufferStorage: "memory", resolution: "1920x1080", fps: 60, bitrateMbps: 30, codec: "h264",
-  captureDesktop: true, micMode: "off", micDevice: "default", micPttVk: 192, micPttLabel: "ö", hotkeySave: "Alt+F10",
+  captureMode: "monitor", monitorId: "", captureDesktop: true, micMode: "off", micDevice: "default", micPttVk: 192, micPttLabel: "ö", hotkeySave: "Alt+F10",
   hotkeyRecord: "Alt+F9", hotkeyOpenFolder: "Alt+F11", hotkeyGallery: "Alt+KeyZ", showNotification: true,
-  notificationSound: true, autostart: false, keepObsRunning: true, replayEnabled: false, lastClip: null,
+  notificationSound: true, autostart: false, keepObsRunning: true, afkTimeoutSeconds: 0, replayEnabled: false, lastClip: null,
 };
-const status = { encoder: "obs_nvenc_h264_tex", bufferSeconds: 150, obsInstalled: true, obsRunning: true, replayEnabled: false, replayActive: false, bufferSince: 0, recording: false, recordingSince: 0, error: null };
+const status = { encoder: "obs_nvenc_h264_tex", bufferSeconds: 150, obsInstalled: true, obsRunning: true, replayEnabled: false, replayActive: false, afkPaused: false, bufferSince: 0, recording: false, recordingSince: 0, error: null };
 export async function invoke(command: string, args?: Record<string, unknown>): Promise<unknown> {
   switch (command) {
     case "get_locale": return { lang: settings.language, messages: settings.language === "hu" ? hu : en };
@@ -17,6 +17,10 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
     case "get_status": return status;
     case "get_update_state": return { current: "0.4.1", phase: "latest", version: null, notes: null, progress: null, error: null };
     case "list_clips": case "list_mics": return [];
+    case "list_monitors": return [
+      { deviceId: "display-primary", name: "Dell U2723QE", width: 3840, height: 2160, primary: true },
+      { deviceId: "display-secondary", name: "Dell U2415", width: 1920, height: 1200, primary: false },
+    ];
     case "disk_buffer_available": return true;
     case "buffer_budget": return { maxMb: 1024, seconds: args?.seconds };
     case "open_project_link": document.body.dataset.linkTarget = String(args?.target); return;

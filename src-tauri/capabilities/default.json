@@ -16,6 +16,7 @@
     "allow-save-settings",
     "allow-buffer-budget",
     "allow-list-mics",
+    "allow-list-monitors",
     "allow-disk-buffer-available",
     "allow-save-replay",
     "allow-toggle-record",

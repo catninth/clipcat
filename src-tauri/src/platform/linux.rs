@@ -223,6 +223,16 @@ struct InternAtomReply {
 }
 
 #[repr(C)]
+struct GetAtomNameReply {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    length: u32,
+    name_len: u16,
+    pad1: [u8; 22],
+}
+
+#[repr(C)]
 struct GetPropertyReply {
     response_type: u8,
     format: u8,
@@ -241,6 +251,32 @@ struct QueryKeymapReply {
     sequence: u16,
     length: u32,
     keys: [u8; 32],
+}
+
+#[repr(C)]
+struct QueryExtensionReply {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    length: u32,
+    present: u8,
+    major_opcode: u8,
+    first_event: u8,
+    first_error: u8,
+}
+
+#[repr(C)]
+struct ScreenSaverInfoReply {
+    response_type: u8,
+    state: u8,
+    sequence: u16,
+    length: u32,
+    saver_window: u32,
+    ms_until_server: u32,
+    ms_since_user_input: u32,
+    event_mask: u32,
+    kind: u8,
+    pad0: [u8; 7],
 }
 
 #[repr(C)]
@@ -293,6 +329,9 @@ struct Xcb {
     keysyms: Vec<u32>,
     intern_atom: unsafe extern "C" fn(Conn, u8, u16, *const c_char) -> Cookie,
     intern_atom_reply: ReplyFn<InternAtomReply>,
+    get_atom_name: unsafe extern "C" fn(Conn, u32) -> Cookie,
+    get_atom_name_reply: ReplyFn<GetAtomNameReply>,
+    get_atom_name_name: unsafe extern "C" fn(*const GetAtomNameReply) -> *const c_char,
     get_property: unsafe extern "C" fn(Conn, u8, u32, u32, u32, u32, u32) -> Cookie,
     get_property_reply: ReplyFn<GetPropertyReply>,
     get_property_value: unsafe extern "C" fn(*const GetPropertyReply) -> *mut c_void,
@@ -302,7 +341,14 @@ struct Xcb {
     query_pointer: unsafe extern "C" fn(Conn, u32) -> Cookie,
     query_pointer_reply: ReplyFn<QueryPointerReply>,
     randr: Option<Randr>,
+    screensaver: Option<ScreenSaver>,
     _libs: (Library, Option<Library>),
+}
+
+struct ScreenSaver {
+    query_info: unsafe extern "C" fn(Conn, u32) -> Cookie,
+    query_info_reply: ReplyFn<ScreenSaverInfoReply>,
+    _lib: Library,
 }
 
 struct Randr {
@@ -343,6 +389,24 @@ macro_rules! sym {
     ($lib:expr, $name:literal) => {
         *$lib.get(concat!($name, "\0").as_bytes()).ok()?
     };
+}
+
+impl ScreenSaver {
+    unsafe fn load(conn: Conn, xcb: &Library) -> Option<Self> {
+        let lib = Library::new("libxcb-screensaver.so.0").ok()?;
+        let get_extension_data: unsafe extern "C" fn(Conn, *mut c_void) -> *const QueryExtensionReply =
+            sym!(xcb, "xcb_get_extension_data");
+        let extension = *lib.get::<*mut c_void>(b"xcb_screensaver_id\0").ok()?;
+        let data = get_extension_data(conn, extension);
+        if data.is_null() || (*data).present == 0 {
+            return None;
+        }
+        Some(Self {
+            query_info: sym!(lib, "xcb_screensaver_query_info"),
+            query_info_reply: sym!(lib, "xcb_screensaver_query_info_reply"),
+            _lib: lib,
+        })
+    }
 }
 
 impl Xcb {
@@ -403,6 +467,9 @@ impl Xcb {
             keysyms,
             intern_atom: sym!(lib, "xcb_intern_atom"),
             intern_atom_reply: sym!(lib, "xcb_intern_atom_reply"),
+            get_atom_name: sym!(lib, "xcb_get_atom_name"),
+            get_atom_name_reply: sym!(lib, "xcb_get_atom_name_reply"),
+            get_atom_name_name: sym!(lib, "xcb_get_atom_name_name"),
             get_property: sym!(lib, "xcb_get_property"),
             get_property_reply: sym!(lib, "xcb_get_property_reply"),
             get_property_value: sym!(lib, "xcb_get_property_value"),
@@ -412,6 +479,7 @@ impl Xcb {
             query_pointer: sym!(lib, "xcb_query_pointer"),
             query_pointer_reply: sym!(lib, "xcb_query_pointer_reply"),
             randr,
+            screensaver: ScreenSaver::load(conn, &lib),
             _libs: (lib, randr_lib),
         })
     }
@@ -420,6 +488,19 @@ impl Xcb {
         unsafe {
             let cookie = (self.intern_atom)(self.conn, 0, name.len() as u16, name.as_ptr() as *const c_char);
             reply(self.conn, self.intern_atom_reply, cookie).map_or(0, |r| r.get().atom)
+        }
+    }
+
+    fn atom_name(&self, atom: u32) -> Option<String> {
+        if atom == 0 {
+            return None;
+        }
+        unsafe {
+            let cookie = (self.get_atom_name)(self.conn, atom);
+            let r = reply(self.conn, self.get_atom_name_reply, cookie)?;
+            let name = (self.get_atom_name_name)(r.0) as *const u8;
+            let len = r.get().name_len as usize;
+            (len > 0 && !name.is_null()).then(|| String::from_utf8_lossy(std::slice::from_raw_parts(name, len)).into_owned())
         }
     }
 
@@ -475,14 +556,28 @@ fn with_xcb<T>(f: impl FnOnce(&Xcb) -> T) -> Option<T> {
     Some(f(&guard))
 }
 
-/// The primary monitor; device_id is the RandR monitor index used by OBS's xshm_input_v2 source.
-pub fn primary_monitor() -> Option<Monitor> {
+/// Active X11 displays; device_id preserves the RandR index used by OBS's xshm_input_v2 source.
+pub fn monitors() -> Vec<Monitor> {
+    // Wayland selects the captured screen through the system portal; XWayland's outputs do not
+    // identify those streams and cannot be selected by OBS's PipeWire source.
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland") {
+        return Vec::new();
+    }
     with_xcb(|x| {
-        let monitors = x.monitors();
-        let index = monitors.iter().position(|m| m.primary != 0).unwrap_or(0);
-        monitors.get(index).map(|m| Monitor { device_id: index.to_string(), width: m.width as u32, height: m.height as u32 })
+        x.monitors()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, monitor)| monitor.width > 0 && monitor.height > 0)
+            .map(|(index, monitor)| Monitor {
+                device_id: index.to_string(),
+                name: x.atom_name(monitor.name).unwrap_or_else(|| format!("Monitor {}", index + 1)),
+                width: monitor.width as u32,
+                height: monitor.height as u32,
+                primary: monitor.primary != 0,
+            })
+            .collect()
     })
-    .flatten()
+    .unwrap_or_default()
 }
 
 pub fn foreground_window() -> Option<WindowInfo> {
@@ -503,6 +598,24 @@ pub fn foreground_window() -> Option<WindowInfo> {
         let fullscreen_atom = x.atom("_NET_WM_STATE_FULLSCREEN");
         let fullscreen = fullscreen_atom != 0 && x.u32s(window, "_NET_WM_STATE").contains(&fullscreen_atom);
         Some(WindowInfo { title, exe, fullscreen })
+    })
+    .flatten()
+}
+
+/// Time since input anywhere in the X11 session, if its ScreenSaver extension is available.
+/// XWayland does not see native Wayland activity, so never use its idle count for AFK.
+pub fn idle_seconds() -> Option<u64> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|s| !s.is_empty())
+        || std::env::var_os("WAYLAND_SOCKET").is_some_and(|s| !s.is_empty())
+        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s.eq_ignore_ascii_case("wayland"))
+    {
+        return None;
+    }
+    with_xcb(|x| unsafe {
+        let screensaver = x.screensaver.as_ref()?;
+        let cookie = (screensaver.query_info)(x.conn, x.root);
+        let info = reply(x.conn, screensaver.query_info_reply, cookie)?;
+        Some(u64::from(info.get().ms_since_user_input) / 1000)
     })
     .flatten()
 }

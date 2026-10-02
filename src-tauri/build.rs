@@ -9,6 +9,7 @@ fn main() {
             "save_settings",
             "buffer_budget",
             "list_mics",
+            "list_monitors",
             "disk_buffer_available",
             "save_replay",
             "toggle_record",

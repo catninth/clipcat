@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod afk;
 mod clips;
 mod engine;
 mod media;
@@ -19,7 +20,7 @@ use i18n::{t, tf};
 use serde::Serialize;
 use serde_json::json;
 use settings::Settings;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -56,6 +57,7 @@ struct Status {
     obs_running: bool,
     replay_enabled: bool,
     replay_active: bool,
+    afk_paused: bool,
     /// Last buffer clear (Unix ms), or 0 if not running
     buffer_since: u64,
     recording: bool,
@@ -91,8 +93,10 @@ struct AppState {
     tray_labels: Mutex<Vec<(MenuItem<Wry>, &'static str)>>,
     engine: Mutex<Option<Engine>>,
     engine_error: Mutex<Option<String>>,
-    /// Folder for the foreground game when saving was requested (the save completes later)
+    /// Folder for the foreground application when saving was requested (the save completes later).
     pending_folder: Mutex<Option<String>>,
+    /// Manual recordings awaiting finalization, grouped when stopping was requested.
+    pending_recording_folders: Mutex<HashMap<PathBuf, String>>,
     last_recover: Mutex<Option<Instant>>,
     quitting: AtomicBool,
     toast_generation: AtomicU64,
@@ -118,7 +122,11 @@ fn pretty_hotkey(hotkey: &str) -> String {
 // ---------- Recording engine ----------
 
 fn engine_config(s: &Settings) -> engine::Config {
-    let monitor = platform::primary_monitor();
+    let monitor = if s.capture_mode == "monitor" {
+        platform::selected_monitor(&s.monitor_id)
+    } else {
+        platform::primary_monitor()
+    };
     let base = monitor.as_ref().map_or((1920, 1080), |m| (m.width, m.height));
     let output = if s.resolution == "native" {
         base
@@ -139,6 +147,7 @@ fn engine_config(s: &Settings) -> engine::Config {
         fps: s.fps,
         bitrate_kbps: s.bitrate_mbps * 1000,
         hevc: s.codec == "hevc",
+        capture_mode: s.capture_mode.clone(),
         capture_desktop: s.capture_desktop,
         monitor_id: monitor.map(|m| m.device_id).unwrap_or_default(),
         mic_device: s.mic_device.clone(),
@@ -218,8 +227,16 @@ fn on_engine_event(app: &AppHandle, event: engine::Event) {
         }
         // Arrives while the engine is locked, so handle it on a separate thread
         engine::Event::Recorded(path) => {
+            // Consume the snapshot before stop_recording returns; audio cleanup can fail
+            // even when the video has already been finalized successfully.
+            let path = PathBuf::from(path);
+            let folder = state(app).pending_recording_folders.lock().unwrap().remove(&path);
+            let folder = folder.or_else(|| {
+                let settings = current_settings(app);
+                (settings.capture_mode == "monitor").then(|| capture_folder(&settings, platform::foreground_window()))
+            });
             let app = app.clone();
-            std::thread::spawn(move || finish_recording(&app, PathBuf::from(path)));
+            std::thread::spawn(move || finish_recording(&app, path, folder));
         }
         engine::Event::RecordingFailed(code) => {
             logfile::write(&format!("Recording stopped due to an error, code: {code}"));
@@ -260,7 +277,15 @@ fn clear_buffer(app: &AppHandle) {
     refresh_status(app);
 }
 
-/// A ShadowPlay-style filename that does not yet exist in the game folder.
+fn capture_folder(s: &Settings, window: Option<platform::WindowInfo>) -> String {
+    if s.capture_mode == "monitor" {
+        games::application_folder_for(window)
+    } else {
+        games::folder_for(window)
+    }
+}
+
+/// A ShadowPlay-style filename that does not yet exist in the application folder.
 fn clip_path(app: &AppHandle, folder: &str, ext: &str) -> PathBuf {
     let dir = PathBuf::from(current_settings(app).output_dir).join(folder);
     let _ = std::fs::create_dir_all(&dir);
@@ -274,16 +299,23 @@ fn clip_path(app: &AppHandle, folder: &str, ext: &str) -> PathBuf {
     target
 }
 
-/// Move the saved clip into the game folder with a ShadowPlay-style name.
+/// Move the saved clip into the application folder with a ShadowPlay-style name.
 fn finish_save(app: &AppHandle, src: PathBuf) {
     let folder = state(app)
         .pending_folder
         .lock()
         .unwrap()
         .take()
-        .unwrap_or_else(|| games::folder_for(platform::foreground_window()));
+        .unwrap_or_else(|| capture_folder(&current_settings(app), platform::foreground_window()));
+    let (final_path, note) = move_saved_clip(app, src, &folder);
+    logfile::write(&format!("Clip saved: {}", final_path.display()));
+    announce_clip(app, &final_path, &folder, &t("toast.clipSaved"), note);
+    state(app).save_in_progress.store(false, Ordering::SeqCst);
+}
+
+fn move_saved_clip(app: &AppHandle, src: PathBuf, folder: &str) -> (PathBuf, Option<String>) {
     let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("mp4").to_string();
-    let target = clip_path(app, &folder, &ext);
+    let target = clip_path(app, folder, &ext);
 
     // The muxer has just finalized the file; wait briefly if it still holds the file open
     let mut moved = false;
@@ -295,24 +327,22 @@ fn finish_save(app: &AppHandle, src: PathBuf) {
         std::thread::sleep(Duration::from_millis(250));
     }
     let final_path = if moved { target } else { src };
-    logfile::write(&format!("Klip mentve: {}", final_path.display()));
-    announce_clip(
-        app,
-        &final_path,
-        &folder,
-        &t("toast.clipSaved"),
-        (!moved).then(|| t("toast.moveFailed")),
-    );
-    state(app).save_in_progress.store(false, Ordering::SeqCst);
+    (final_path, (!moved).then(|| t("toast.moveFailed")))
 }
 
-fn finish_recording(app: &AppHandle, path: PathBuf) {
-    let folder = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    announce_clip(app, &path, &folder, &t("toast.recordingSaved"), None);
+fn finish_recording(app: &AppHandle, path: PathBuf, requested_folder: Option<String>) {
+    let (path, folder, note) = if let Some(folder) = requested_folder {
+        let (path, note) = move_saved_clip(app, path, &folder);
+        (path, folder, note)
+    } else {
+        let folder = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        (path, folder, None)
+    };
+    announce_clip(app, &path, &folder, &t("toast.recordingSaved"), note);
     refresh_status(app);
 }
 
@@ -336,9 +366,61 @@ fn announce_clip(app: &AppHandle, path: &Path, folder: &str, title: &str, note: 
     show_toast(app, "ok", title, &detail);
 }
 
+fn remember_recording_folder(app: &AppHandle, engine: &Engine, window: Option<platform::WindowInfo>) -> Option<PathBuf> {
+    let settings = current_settings(app);
+    if settings.capture_mode != "monitor" {
+        return None;
+    }
+    let path = PathBuf::from(engine.recording_path()?);
+    state(app)
+        .pending_recording_folders
+        .lock()
+        .unwrap()
+        .insert(path.clone(), capture_folder(&settings, window));
+    Some(path)
+}
+
+/// Called with the operations lock held, so AFK transitions cannot race saves or settings changes.
+fn sync_afk(app: &AppHandle) {
+    let st = state(app);
+    if st.save_in_progress.load(Ordering::SeqCst)
+        || st.installing.load(Ordering::SeqCst)
+        || st.quitting.load(Ordering::SeqCst)
+    {
+        return;
+    }
+    let timeout = st.settings.lock().unwrap().afk_timeout_seconds;
+    let idle = if timeout == 0 { None } else { platform::idle_seconds() };
+    let mut slot = st.engine.lock().unwrap();
+    let Some(engine) = slot.as_mut() else { return };
+    if engine.saving() {
+        return;
+    }
+    let paused = afk::should_pause(timeout, idle, engine.afk_paused());
+    if paused == engine.afk_paused() {
+        return;
+    }
+    let result = engine.set_afk_paused(paused);
+    drop(slot);
+    match result {
+        Ok(()) => {
+            logfile::write(if paused { "Replay paused: user is AFK" } else { "AFK replay pause ended" });
+            if !paused {
+                *st.engine_error.lock().unwrap() = None;
+            }
+        }
+        Err(error) => {
+            logfile::write(&format!("AFK replay transition failed: {error}"));
+            *st.engine_error.lock().unwrap() = Some(error.clone());
+            show_toast(app, "error", &t("toast.recordFailed"), &error);
+        }
+    }
+}
+
 fn refresh_status(app: &AppHandle) {
     let st = state(app);
     let Ok(_operation) = st.operations.try_lock() else { return };
+    sync_afk(app);
     if let Some(engine) = st.engine.lock().unwrap().as_mut() {
         if let Err(error) = engine.check_resources() {
             *st.engine_error.lock().unwrap() = Some(error);
@@ -352,14 +434,15 @@ fn refresh_status(app: &AppHandle) {
                 e.buffer_since(),
                 e.recording_active(),
                 e.recording_since(),
+                e.afk_paused(),
             )
         })
     };
     let mut snap = snapshot();
 
-    // Restart the buffer if an error stopped it (not a manual stop), with a delay between attempts
+    // Recover unexpected stops only; manual and AFK pauses must stay stopped.
     let recover = st.settings.lock().unwrap().keep_obs_running;
-    if snap.is_some_and(|(enabled, active, ..)| enabled && !active)
+    if snap.is_some_and(|(enabled, active, _, _, _, paused)| enabled && !active && !paused)
         && recover
         && !st.quitting.load(Ordering::SeqCst)
         && !st.installing.load(Ordering::SeqCst)
@@ -380,7 +463,7 @@ fn refresh_status(app: &AppHandle) {
         }
     }
 
-    let (replay_enabled, replay_active, buffer_since, recording, recording_since) = snap.unwrap_or_default();
+    let (replay_enabled, replay_active, buffer_since, recording, recording_since, afk_paused) = snap.unwrap_or_default();
     let (encoder, buffer_seconds) = st
         .engine
         .lock()
@@ -393,6 +476,7 @@ fn refresh_status(app: &AppHandle) {
         obs_running: snap.is_some(),
         replay_enabled,
         replay_active,
+        afk_paused,
         buffer_since,
         recording,
         recording_since,
@@ -430,6 +514,7 @@ fn start_status_thread(app: AppHandle) {
 // ---------- Actions ----------
 
 fn request_save(app: &AppHandle) -> Result<(), String> {
+    let window = platform::foreground_window();
     let st = state(app);
     let _operation = st.operations.lock().unwrap();
     if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
@@ -442,7 +527,7 @@ fn request_save(app: &AppHandle) -> Result<(), String> {
     let result = if !status.obs_installed {
         Err(t("error.engineMissing"))
     } else {
-        let folder = games::folder_for(platform::foreground_window());
+        let folder = capture_folder(&current_settings(app), window);
         *st.pending_folder.lock().unwrap() = Some(folder.clone());
         match st.engine.lock().unwrap().as_mut() {
             Some(engine) => engine.save().map(|()| folder),
@@ -464,7 +549,7 @@ fn request_save(app: &AppHandle) -> Result<(), String> {
 }
 
 /// Start or stop manual recording (stopping waits for file finalization, so it runs off the main thread).
-fn toggle_recording(app: &AppHandle) {
+fn toggle_recording(app: &AppHandle, window: Option<platform::WindowInfo>) {
     let st = state(app);
     let operation = st.operations.lock().unwrap();
     if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
@@ -475,12 +560,19 @@ fn toggle_recording(app: &AppHandle) {
         match engine.as_mut() {
             None => Err(t("error.engineNotRunning")),
             Some(e) if e.recording_active() => {
+                let path = remember_recording_folder(app, e, window);
                 // Stopping waits for file finalization, so signal that saving has started first
                 show_toast(app, "pending", &t("toast.recordingSaving"), "");
-                e.stop_recording().map(|()| None)
+                let result = e.stop_recording().map(|()| None);
+                if result.is_err() {
+                    if let Some(path) = path {
+                        st.pending_recording_folders.lock().unwrap().remove(&path);
+                    }
+                }
+                result
             }
             Some(e) => {
-                let folder = games::folder_for(platform::foreground_window());
+                let folder = capture_folder(&current_settings(app), window);
                 let path = clip_path(app, &folder, "mp4");
                 e.start_recording(&path).map(|()| Some(folder))
             }
@@ -568,8 +660,9 @@ fn run_action(app: &AppHandle, action: Action) {
             let _ = request_save(app);
         }
         Action::Record => {
+            let window = platform::foreground_window();
             let app = app.clone();
-            std::thread::spawn(move || toggle_recording(&app));
+            std::thread::spawn(move || toggle_recording(&app, window));
         }
         Action::OpenFolder => open_last_folder(app),
         Action::Gallery => show_main(app, "gallery"),
@@ -744,6 +837,8 @@ fn update_tray(app: &AppHandle, status: &Status) {
         (ICON_IDLE, t("tray.engineMissing"))
     } else if !status.obs_running {
         (ICON_IDLE, t("tray.captureNotStarted"))
+    } else if status.afk_paused {
+        (ICON_IDLE, t("tray.afkPaused"))
     } else if !status.replay_enabled {
         (ICON_IDLE, t("tray.replayPaused"))
     } else {
@@ -994,13 +1089,19 @@ fn disk_buffer_available() -> bool {
 }
 
 #[tauri::command]
+fn list_monitors() -> Vec<platform::Monitor> {
+    platform::monitors()
+}
+
+#[tauri::command]
 fn save_replay(app: AppHandle) -> Result<(), String> {
     request_save(&app)
 }
 
 #[tauri::command]
 async fn toggle_record(app: AppHandle) {
-    let _ = tauri::async_runtime::spawn_blocking(move || toggle_recording(&app)).await;
+    let window = platform::foreground_window();
+    let _ = tauri::async_runtime::spawn_blocking(move || toggle_recording(&app, window)).await;
 }
 
 #[tauri::command]
@@ -1214,6 +1315,7 @@ fn main() {
             engine: Mutex::new(None),
             engine_error: Mutex::new(None),
             pending_folder: Mutex::new(None),
+            pending_recording_folders: Mutex::new(HashMap::new()),
             last_recover: Mutex::new(None),
             quitting: AtomicBool::new(false),
             toast_generation: AtomicU64::new(0),
@@ -1309,6 +1411,7 @@ fn main() {
             toggle_record,
             set_replay_enabled,
             list_mics,
+            list_monitors,
             disk_buffer_available,
             buffer_budget,
             open_clip,

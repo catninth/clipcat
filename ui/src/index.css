@@ -100,6 +100,75 @@
   &::-webkit-scrollbar-thumb:hover { background-color: rgb(255 255 255 / 0.24); }
 }
 
+/* Shared select menus float above the settings cards and scroll mask. */
+@layer components {
+  .select-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    height: 32px;
+    min-width: 220px;
+    max-width: 340px;
+    padding: 0 10px;
+    border-radius: 8px;
+    background: var(--color-panel-2);
+    color: var(--color-fg);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+    text-align: left;
+    transition: background 150ms, box-shadow 150ms;
+  }
+  .select-trigger:hover:enabled { background: var(--color-panel-3); }
+  .select-trigger:focus-visible, .select-trigger[aria-expanded="true"] {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--color-accent), 0 0 0 3px var(--color-accent-soft);
+  }
+  .select-trigger:disabled { opacity: 0.4; }
+  .select-value { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .select-chevron {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    color: var(--color-muted);
+    transition: transform 150ms;
+  }
+  .select-trigger[aria-expanded="true"] .select-chevron { transform: rotate(180deg); color: var(--color-accent); }
+  .select-menu {
+    position: fixed;
+    z-index: 100;
+    width: max-content;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 5px;
+    border: 1px solid var(--color-line-strong);
+    border-radius: 12px;
+    background: var(--color-panel);
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.4), 0 2px 6px rgb(0 0 0 / 0.2);
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-panel-3) transparent;
+    animation: fade 100ms ease-out;
+  }
+  .select-option {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 34px;
+    padding: 7px 32px 7px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .select-option + .select-option { margin-top: 2px; }
+  .select-option[data-active="true"] { background: var(--color-panel-3); }
+  .select-option[aria-selected="true"] { color: var(--color-accent); }
+  .select-option[aria-selected="true"][data-active="true"] { background: var(--color-accent-soft); }
+  .select-option[aria-disabled="true"] { color: var(--color-faint); cursor: default; }
+  .select-option-label { overflow-wrap: anywhere; }
+  .select-check { position: absolute; right: 10px; width: 14px; height: 14px; flex: none; }
+}
+
 /* ---------- Accessibility ---------- */
 
 @keyframes fade {

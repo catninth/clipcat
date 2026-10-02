@@ -8,6 +8,8 @@ pub struct Settings {
     pub language: String,
     pub output_dir: String,
     pub buffer_seconds: u32,
+    /// Pause replay after this many seconds without user input; zero disables AFK detection.
+    pub afk_timeout_seconds: u32,
     /// "memory" (RAM) or "disk" (segments in `buffer_dir`)
     pub buffer_storage: String,
     pub buffer_dir: String,
@@ -17,6 +19,13 @@ pub struct Settings {
     pub bitrate_mbps: u32,
     /// "h264" or "hevc"
     pub codec: String,
+    /// "monitor" records a display; "game" preserves automatic game capture.
+    /// Existing installations keep their original capture behavior.
+    #[serde(default = "legacy_capture_mode")]
+    pub capture_mode: String,
+    /// Empty means the primary monitor; otherwise a platform display identifier.
+    pub monitor_id: String,
+    /// Legacy desktop fallback in game mode, retained when migrating settings.
     pub capture_desktop: bool,
     /// "off", "ptt", or "always"
     pub mic_mode: String,
@@ -44,6 +53,10 @@ fn enabled() -> bool {
     true
 }
 
+fn legacy_capture_mode() -> String {
+    "game".into()
+}
+
 fn default_output_dir() -> String {
     crate::platform::videos_dir().join("ClipCat").to_string_lossy().into_owned()
 }
@@ -58,12 +71,15 @@ impl Default for Settings {
             language: crate::i18n::system_language(),
             output_dir: default_output_dir(),
             buffer_seconds: 150,
+            afk_timeout_seconds: 0,
             buffer_storage: "memory".into(),
             buffer_dir: default_buffer_dir(),
             resolution: "1920x1080".into(),
             fps: 60,
             bitrate_mbps: 30,
             codec: "h264".into(),
+            capture_mode: "monitor".into(),
+            monitor_id: String::new(),
             capture_desktop: true,
             mic_mode: "off".into(),
             mic_device: "default".into(),
@@ -86,10 +102,10 @@ impl Default for Settings {
 
 impl Settings {
     /// Fields affecting the recording pipeline; changing these requires rebuilding the buffer
-    /// (discarding its contents). Desktop capture and microphone settings change immediately without a rebuild.
+    /// (discarding its contents). Legacy desktop fallback and microphone settings change without a rebuild.
     pub fn pipeline_fingerprint(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.output_dir,
             self.buffer_seconds,
             self.buffer_storage,
@@ -97,7 +113,9 @@ impl Settings {
             self.resolution,
             self.fps,
             self.bitrate_mbps,
-            self.codec
+            self.codec,
+            self.capture_mode,
+            self.monitor_id
         )
     }
 
@@ -110,6 +128,9 @@ impl Settings {
         }
         if !(10..=1200).contains(&self.buffer_seconds) {
             return Err(tf("validate.buffer", &[("min", &10), ("max", &1200)]));
+        }
+        if self.afk_timeout_seconds != 0 && !(MIN_AFK_SECONDS..=MAX_AFK_SECONDS).contains(&self.afk_timeout_seconds) {
+            return Err(tf("validate.afkTimeout", &[("min", &MIN_AFK_SECONDS), ("max", &MAX_AFK_SECONDS)]));
         }
         if !["memory", "disk"].contains(&self.buffer_storage.as_str()) {
             return Err(t("validate.bufferStorage"));
@@ -130,6 +151,12 @@ impl Settings {
         if !["h264", "hevc"].contains(&self.codec.as_str()) {
             return Err(t("validate.codec"));
         }
+        if !["monitor", "game"].contains(&self.capture_mode.as_str()) {
+            return Err(t("validate.captureMode"));
+        }
+        if self.monitor_id.contains('\0') {
+            return Err(t("validate.monitorId"));
+        }
         if !["off", "ptt", "always"].contains(&self.mic_mode.as_str()) {
             return Err(t("validate.micMode"));
         }
@@ -147,6 +174,8 @@ impl Settings {
 }
 
 pub const MIN_BITRATE_MBPS: u32 = 5;
+pub const MIN_AFK_SECONDS: u32 = 10;
+pub const MAX_AFK_SECONDS: u32 = 86_400;
 
 /// Maximum bitrate for the frame rate; at low FPS, higher values only increase file size,
 /// not image quality. The UI (ui/app.js) uses the same table.
@@ -191,6 +220,9 @@ fn from_json(json: &str) -> Settings {
     if !(10..=1200).contains(&s.buffer_seconds) {
         s.buffer_seconds = defaults.buffer_seconds;
     }
+    if s.afk_timeout_seconds != 0 && !(MIN_AFK_SECONDS..=MAX_AFK_SECONDS).contains(&s.afk_timeout_seconds) {
+        s.afk_timeout_seconds = defaults.afk_timeout_seconds;
+    }
     if !["memory", "disk"].contains(&s.buffer_storage.as_str()) {
         s.buffer_storage = defaults.buffer_storage;
     }
@@ -200,6 +232,12 @@ fn from_json(json: &str) -> Settings {
     s.bitrate_mbps = s.bitrate_mbps.clamp(MIN_BITRATE_MBPS, max_bitrate_mbps(s.fps));
     if !["h264", "hevc"].contains(&s.codec.as_str()) {
         s.codec = defaults.codec;
+    }
+    if !["monitor", "game"].contains(&s.capture_mode.as_str()) {
+        s.capture_mode = defaults.capture_mode;
+    }
+    if s.monitor_id.contains('\0') {
+        s.monitor_id.clear();
     }
     if s.resolution != "native" && parse_resolution(&s.resolution).is_none() {
         s.resolution = defaults.resolution;
@@ -237,6 +275,82 @@ fn save_to(settings: &Settings, path: &std::path::Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn existing_capture_behavior_is_preserved_and_new_installs_use_monitor_mode() {
+        assert_eq!(Settings::default().capture_mode, "monitor");
+        assert!(Settings::default().monitor_id.is_empty());
+        for capture_desktop in [false, true] {
+            let legacy = from_json(&format!(r#"{{"captureDesktop":{capture_desktop}}}"#));
+            assert_eq!(legacy.capture_mode, "game");
+            assert_eq!(legacy.capture_desktop, capture_desktop);
+            assert!(legacy.monitor_id.is_empty());
+        }
+    }
+
+    #[test]
+    fn mode_and_monitor_choice_persist_and_invalid_values_are_rejected() {
+        let settings = Settings {
+            capture_mode: "monitor".into(),
+            monitor_id: r#"\\?\DISPLAY#SECONDARY"#.into(),
+            ..Settings::default()
+        };
+        let restored = from_json(&serde_json::to_string(&settings).unwrap());
+        assert_eq!(restored, settings);
+        let mut invalid = settings.clone();
+        invalid.capture_mode = "unknown".into();
+        assert!(invalid.validate().is_err());
+        invalid.capture_mode = "monitor".into();
+        invalid.monitor_id = "bad\0monitor".into();
+        assert!(invalid.validate().is_err());
+        let repaired = from_json(r#"{"captureMode":"unknown","monitorId":"bad\u0000monitor"}"#);
+        assert!(repaired.validate().is_ok());
+        assert_eq!(repaired.capture_mode, "monitor");
+        assert!(repaired.monitor_id.is_empty());
+    }
+
+    #[test]
+    fn capture_source_changes_rebuild_the_replay_buffer() {
+        let original = Settings::default();
+        let mut changed = original.clone();
+        changed.capture_mode = "game".into();
+        assert_ne!(original.pipeline_fingerprint(), changed.pipeline_fingerprint());
+        changed = original.clone();
+        changed.monitor_id = "secondary".into();
+        assert_ne!(original.pipeline_fingerprint(), changed.pipeline_fingerprint());
+    }
+
+    #[test]
+    fn afk_is_opt_in_for_new_and_existing_settings() {
+        assert_eq!(Settings::default().afk_timeout_seconds, 0);
+        assert_eq!(from_json("{}").afk_timeout_seconds, 0);
+        for timeout in [1, 9, MAX_AFK_SECONDS + 1, u32::MAX] {
+            let s = Settings { afk_timeout_seconds: timeout, ..Settings::default() };
+            assert!(s.validate().is_err());
+            assert_eq!(from_json(&serde_json::to_string(&s).unwrap()).afk_timeout_seconds, 0);
+        }
+    }
+
+    #[test]
+    fn custom_capture_values_survive_persistence_without_rounding() {
+        for timeout in [0, MIN_AFK_SECONDS, 137, MAX_AFK_SECONDS] {
+            let s = Settings {
+                afk_timeout_seconds: timeout,
+                buffer_seconds: 137,
+                bitrate_mbps: 37,
+                ..Settings::default()
+            };
+            assert!(s.validate().is_ok());
+            assert_eq!(from_json(&serde_json::to_string(&s).unwrap()), s);
+        }
+    }
+
+    #[test]
+    fn afk_policy_changes_do_not_rebuild_the_recording_pipeline() {
+        let old = Settings::default();
+        let new = Settings { afk_timeout_seconds: 300, ..old.clone() };
+        assert_eq!(old.pipeline_fingerprint(), new.pipeline_fingerprint());
+    }
+
     #[test]
     fn concurrent_persistence_keeps_a_complete_document() {
         let dir = tempfile::tempdir().unwrap();

@@ -207,6 +207,7 @@ static RECORD_STOP_CODE: std::sync::atomic::AtomicI64 = std::sync::atomic::Atomi
 static DISPLAY_ITEM: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static GAME_ITEM: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static DESKTOP_WANTED: AtomicBool = AtomicBool::new(false);
+static MONITOR_MODE: AtomicBool = AtomicBool::new(false);
 static REPLAY_WANTED: AtomicBool = AtomicBool::new(false);
 static RECORDING_WANTED: AtomicBool = AtomicBool::new(false);
 /// Game capture is currently recording the selected game.
@@ -216,6 +217,10 @@ static VISIBILITY_LOCK: Mutex<()> = Mutex::new(());
 /// Update scene item visibility to match the current state.
 fn refresh_visibility() {
     let Some(api) = API.get() else { return };
+    refresh_visibility_with(api);
+}
+
+fn refresh_visibility_with(api: &Api) {
     let _guard = VISIBILITY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (display, game) = (DISPLAY_ITEM.load(Ordering::SeqCst), GAME_ITEM.load(Ordering::SeqCst));
     // Game capture is not available on every platform
@@ -223,14 +228,15 @@ fn refresh_visibility() {
         return;
     }
     let capturing = REPLAY_WANTED.load(Ordering::SeqCst) || RECORDING_WANTED.load(Ordering::SeqCst);
-    if !capturing {
+    let monitor = MONITOR_MODE.load(Ordering::SeqCst);
+    if !capturing || monitor {
         // Hidden game capture unhooks; showing it again emits another hooked signal
         GAME_HOOKED.store(false, Ordering::SeqCst);
     }
-    let desktop = capturing && DESKTOP_WANTED.load(Ordering::SeqCst) && !GAME_HOOKED.load(Ordering::SeqCst);
+    let desktop = capturing && (monitor || (DESKTOP_WANTED.load(Ordering::SeqCst) && !GAME_HOOKED.load(Ordering::SeqCst)));
     unsafe {
         if !game.is_null() {
-            (api.obs_sceneitem_set_visible)(game, capturing);
+            (api.obs_sceneitem_set_visible)(game, capturing && !monitor);
         }
         (api.obs_sceneitem_set_visible)(display, desktop);
     }
@@ -238,7 +244,7 @@ fn refresh_visibility() {
 
 /// Signals arrive on libobs threads; do not modify the scene from those threads.
 fn set_game_hooked(hooked: bool) {
-    GAME_HOOKED.store(hooked, Ordering::SeqCst);
+    GAME_HOOKED.store(hooked && !MONITOR_MODE.load(Ordering::SeqCst), Ordering::SeqCst);
     std::thread::spawn(refresh_visibility);
 }
 
@@ -467,6 +473,9 @@ pub struct Config {
     pub fps: u32,
     pub bitrate_kbps: u32,
     pub hevc: bool,
+    /// "monitor" records the selected display; "game" keeps foreground game capture.
+    pub capture_mode: String,
+    /// Legacy game mode fallback when no game is hooked.
     pub capture_desktop: bool,
     pub monitor_id: String,
     pub mic_device: String,
@@ -488,6 +497,8 @@ pub struct Engine {
     output: Ptr,
     /// False if the user stopped replay
     replay_enabled: bool,
+    /// Temporary replay-only inactivity pause; manual recording remains independent.
+    afk_paused: bool,
     /// Most recent buffer start/restart, in Unix milliseconds
     buffer_since: u64,
     /// Manual recording (ffmpeg_muxer), using the same encoders
@@ -571,7 +582,7 @@ impl Engine {
 
     /// WASAPI/Pulse sources open devices when created; muting alone does not release them.
     fn sync_audio(&mut self) -> Result<(), String> {
-        let capturing = REPLAY_WANTED.load(Ordering::SeqCst) || RECORDING_WANTED.load(Ordering::SeqCst);
+        let capturing = (!self.afk_paused && REPLAY_WANTED.load(Ordering::SeqCst)) || RECORDING_WANTED.load(Ordering::SeqCst);
         let api = self.api;
         if capturing && self.desktop_audio.is_null() {
             self.desktop_audio = self.create_source(
@@ -674,6 +685,7 @@ impl Engine {
             audio_encoder: null_mut(),
             output: null_mut(),
             replay_enabled: replay,
+            afk_paused: false,
             buffer_since: 0,
             record_output: null_mut(),
             record_path: String::new(),
@@ -719,12 +731,13 @@ impl Engine {
         if self.game.is_null() {
             return;
         }
-        let capturing = REPLAY_WANTED.load(Ordering::SeqCst) || RECORDING_WANTED.load(Ordering::SeqCst);
-        self.update_game_window(if capturing { sys::game_window() } else { None });
+        let capturing = (!self.afk_paused && REPLAY_WANTED.load(Ordering::SeqCst)) || RECORDING_WANTED.load(Ordering::SeqCst);
+        self.update_game_window(if capturing && self.config.capture_mode != "monitor" { sys::game_window() } else { None });
     }
 
     fn update_game_window(&mut self, window: Option<String>) {
-        if self.game_window == window {
+        let window = if self.config.capture_mode == "monitor" { None } else { window };
+        if self.game.is_null() || self.game_window == window {
             return;
         }
         let settings = sys::game_settings(Data::new(self.api)).str("window", window.as_deref().unwrap_or(""));
@@ -786,7 +799,8 @@ impl Engine {
             DISPLAY_ITEM.store(self.display_item, Ordering::SeqCst);
             GAME_ITEM.store(game_item, Ordering::SeqCst);
             DESKTOP_WANTED.store(self.config.capture_desktop, Ordering::SeqCst);
-            REPLAY_WANTED.store(self.replay_enabled, Ordering::SeqCst);
+            MONITOR_MODE.store(self.config.capture_mode == "monitor", Ordering::SeqCst);
+            REPLAY_WANTED.store(self.replay_enabled && !self.afk_paused, Ordering::SeqCst);
             RECORDING_WANTED.store(false, Ordering::SeqCst);
             refresh_visibility();
 
@@ -885,7 +899,7 @@ impl Engine {
             (api.signal_handler_connect)(signals, c"stop".as_ptr(), on_stop, null_mut());
             CURRENT_OUTPUT.store(self.output, Ordering::SeqCst);
         }
-        if self.replay_enabled {
+        if self.replay_enabled && !self.afk_paused {
             self.start_replay()?;
         }
         logfile::write(&format!(
@@ -901,6 +915,9 @@ impl Engine {
     }
 
     fn start_replay(&mut self) -> Result<(), String> {
+        if self.afk_paused {
+            return Ok(());
+        }
         let api = self.api;
         if self.output.is_null() {
             return Err(t("engine.replayNotCreated"));
@@ -949,7 +966,11 @@ impl Engine {
         if self.saving() {
             return Err(t("engine.saveBusy"));
         }
-        if !enabled {
+        if self.afk_paused {
+            self.replay_enabled = enabled;
+            set_replay_wanted(false);
+            self.sync_audio()
+        } else if !enabled {
             self.replay_enabled = false;
             self.stop_replay();
             set_replay_wanted(false);
@@ -968,6 +989,33 @@ impl Engine {
             }
             result
         }
+    }
+
+    /// Pause replay during inactivity without interrupting manual video or audio.
+    /// Returning activity only resumes replay when the user still has it enabled.
+    pub fn set_afk_paused(&mut self, paused: bool) -> Result<(), String> {
+        if self.afk_paused == paused {
+            return Ok(());
+        }
+        if self.saving() {
+            return Err(t("engine.saveBusy"));
+        }
+        self.afk_paused = paused;
+        if paused {
+            set_replay_wanted(false);
+            self.stop_replay();
+            self.sync_capture_target();
+            self.sync_audio()
+        } else if self.replay_enabled {
+            // Preserve desired replay state on failure so regular recovery can retry.
+            self.restart()
+        } else {
+            self.sync_audio()
+        }
+    }
+
+    pub fn afk_paused(&self) -> bool {
+        self.afk_paused
     }
 
     /// Clear the buffer after saving: the next clip contains only footage recorded from this point onward.
@@ -1049,13 +1097,13 @@ impl Engine {
         self.release_record_output();
         set_recording_wanted(false);
         let path = std::mem::take(&mut self.record_path);
-        self.sync_audio()?;
+        let audio = self.sync_audio();
         if !finished || RECORD_STOP_CODE.load(Ordering::SeqCst) != 0 || !std::fs::metadata(&path).is_ok_and(|m| m.len() > 0) {
             return Err(tf("engine.recordingFinalize", &[("path", &path)]));
         }
         logfile::write(&format!("Recording stopped: {path}"));
         emit(Event::Recorded(path));
-        Ok(())
+        audio
     }
 
     fn release_record_output(&mut self) {
@@ -1143,10 +1191,14 @@ impl Engine {
         if (old.base, old.output, old.fps) != (config.base, config.output, config.fps) {
             reset_video(api, config)?;
         }
+        if old.base != config.base {
+            self.resize_scene();
+        }
         if old.monitor_id != config.monitor_id {
             let settings = sys::display_settings(Data::new(api), &config.monitor_id);
             unsafe { (api.obs_source_update)(self.display, settings.ptr) };
         }
+        self.set_capture_mode(&config.capture_mode);
         self.set_desktop_visible(config.capture_desktop);
         if old.mic_device != config.mic_device {
             self.update_mic(&config.mic_device);
@@ -1202,6 +1254,9 @@ impl Engine {
 
     /// Restart the buffer with unchanged settings (e.g. after an error stops it).
     pub fn restart(&mut self) -> Result<(), String> {
+        if self.afk_paused {
+            return Ok(());
+        }
         // Outputs share encoders: recovering replay must never stop manual recording.
         if self.saving() {
             return Err(t("engine.saveBusy"));
@@ -1220,6 +1275,32 @@ impl Engine {
         self.config.capture_desktop = visible;
         DESKTOP_WANTED.store(visible, Ordering::SeqCst);
         refresh_visibility();
+    }
+
+    /// Switch the capture source live while preserving the legacy desktop fallback preference.
+    pub fn set_capture_mode(&mut self, mode: &str) {
+        let monitor = mode == "monitor";
+        self.config.capture_mode = if monitor { "monitor" } else { "game" }.into();
+        MONITOR_MODE.store(monitor, Ordering::SeqCst);
+        // Hide game capture before clearing its old target, so it cannot hook in monitor mode.
+        refresh_visibility();
+        if monitor {
+            GAME_HOOKED.store(false, Ordering::SeqCst);
+            self.update_game_window(None);
+        }
+    }
+
+    fn resize_scene(&self) {
+        let bounds = Vec2 {
+            x: self.config.base.0 as f32,
+            y: self.config.base.1 as f32,
+            _pad: [0.0; 2],
+        };
+        for item in [self.display_item, GAME_ITEM.load(Ordering::SeqCst)] {
+            if !item.is_null() {
+                unsafe { (self.api.obs_sceneitem_set_bounds)(item, &bounds) };
+            }
+        }
     }
 
     pub fn replay_active(&self) -> bool {
