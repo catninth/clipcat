@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.8.0 – 2026-10-10
+
+Changes since v0.7.0.
+
+### Added
+
+- Add a configurable **Toggle replay buffer** global shortcut under **Settings → Keyboard shortcuts**, with support for changing or clearing the binding.
+- Show enabled/disabled notifications in the existing save-popup style when toggling replay through the shortcut, sidebar switch, or tray menu. Failed changes show an error notification.
+
+### Changed
+
+- Share replay-state handling across keyboard, sidebar, and tray controls, with serialized toggles based on the current engine state.
+- Add Hungarian and English US translations for the shortcut, hints, and notifications, and update notification-setting labels to cover replay toggles as well as saves.
+
+### Compatibility
+
+- Leave the new shortcut unassigned on both new and existing installations to preserve existing bindings. Assigned shortcuts are checked for conflicts and retained across launches.
+- Replay toggles preserve independent manual recordings and respect the existing notification and sound preferences.
+
+### Tests
+
+- Add regression coverage for shortcut capture, saving, restoring, and clearing in both languages, settings migration, and invalid or duplicate bindings.
+
 ## 0.7.0 – 2026-10-02
 
 Changes since v0.6.1.
