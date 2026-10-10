@@ -26,6 +26,7 @@ export interface Settings {
   micPttLabel: string;
   hotkeySave: string;
   hotkeyRecord: string;
+  hotkeyReplay: string;
   hotkeyOpenFolder: string;
   hotkeyGallery: string;
   showNotification: boolean;
@@ -36,7 +37,7 @@ export interface Settings {
   lastClip: string | null;
 }
 
-export type HotkeyField = "hotkeySave" | "hotkeyRecord" | "hotkeyOpenFolder" | "hotkeyGallery";
+export type HotkeyField = "hotkeySave" | "hotkeyRecord" | "hotkeyReplay" | "hotkeyOpenFolder" | "hotkeyGallery";
 
 export interface Status {
   encoder: string;

@@ -36,6 +36,12 @@ Screenshots show the English UI with sample clips and simulated capture state. S
 
 ## Recording controls
 
+Assign **Toggle replay buffer** under **Settings → Keyboard shortcuts** to turn replay
+on or off from any app. It starts unassigned; press Backspace or Delete while capturing
+the shortcut to clear it. The shortcut, sidebar switch, and tray control share the same
+saved replay state and show an enabled/disabled popup using the notification preferences.
+Manual recordings continue independently.
+
 Recording settings accept custom replay lengths (10–1200 seconds) and integer bitrates
 (5 Mbps up to the existing frame-rate limit), alongside the sliders.
 

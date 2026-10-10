@@ -19,7 +19,7 @@ export const settings = {
   language: "hu", outputDir: "C:/Clips", bufferDir: "C:/Buffer", bufferSeconds: 150,
   bufferStorage: "memory", resolution: "1920x1080", fps: 60, bitrateMbps: 5, codec: "h264",
   captureMode: "monitor", monitorId: "", captureDesktop: true, micMode: "off", micDevice: "default", micPttVk: 192, micPttLabel: "ö",
-  hotkeySave: "Alt+F10", hotkeyRecord: "Alt+F9", hotkeyOpenFolder: "Alt+F11", hotkeyGallery: "Alt+KeyZ",
+  hotkeySave: "Alt+F10", hotkeyRecord: "Alt+F9", hotkeyReplay: "", hotkeyOpenFolder: "Alt+F11", hotkeyGallery: "Alt+KeyZ",
   showNotification: true, notificationSound: true, autostart: true, keepObsRunning: true,
   afkTimeoutSeconds: 0, replayEnabled: false, lastClip: null,
 } as Settings;
@@ -135,6 +135,43 @@ function mockCaptureSettings(initial: Settings, listMonitors: () => Promise<Moni
   });
   return () => saved;
 }
+
+it.each([
+  { language: "hu" as const, messages: hu, clearKey: "Backspace" },
+  { language: "en-US" as const, messages: en, clearKey: "Delete" },
+])("captures, saves, restores and clears the replay shortcut in $language", async ({ language, messages, clearKey }) => {
+  i18n.lang = language;
+  i18n.messages = messages;
+  let saved: Settings = { ...settings, language };
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_mics" || command === "list_monitors") return [] as never;
+    if (command === "save_settings") { saved = (args as { settings: Settings }).settings; return "" as never; }
+    if (command === "get_settings") return saved as never;
+    if (command === "get_locale") return { lang: language, messages } as never;
+    return false as never;
+  });
+  const onSaved = vi.fn();
+  const view = render(<SettingsView settings={saved} onSaved={onSaved} onStatus={vi.fn()} update={null} />);
+  expect(await screen.findByText(messages["settings.hotkeyReplay.label"])).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: messages["hotkey.none"] }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("suspend_hotkeys"));
+  fireEvent.keyDown(window, { key: "F8", code: "F8", altKey: true });
+  await screen.findByRole("button", { name: "Alt+F8" });
+  expect(invoke).toHaveBeenCalledWith("resume_hotkeys");
+  expect(invoke).not.toHaveBeenCalledWith("set_replay_enabled", expect.anything());
+  fireEvent.click(screen.getByRole("button", { name: messages["settings.save"] }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({
+    hotkeyReplay: "Alt+F8", hotkeySave: "Alt+F10", hotkeyRecord: "Alt+F9", replayEnabled: false,
+  })));
+
+  view.unmount();
+  render(<SettingsView settings={saved} onSaved={onSaved} onStatus={vi.fn()} update={null} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Alt+F8" }));
+  fireEvent.keyDown(window, { key: clearKey, code: clearKey });
+  await screen.findByRole("button", { name: messages["hotkey.none"] });
+  fireEvent.click(screen.getByRole("button", { name: messages["settings.save"] }));
+  await waitFor(() => expect(onSaved).toHaveBeenLastCalledWith(expect.objectContaining({ hotkeyReplay: "" })));
+});
 
 it("offers exactly two capture modes and saves the selected monitor across reopening Settings", async () => {
   const initial: Settings = { ...settings, language: "en-US", captureMode: "game", captureDesktop: false };

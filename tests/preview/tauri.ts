@@ -5,7 +5,7 @@ let settings: Settings = {
   language: "hu", outputDir: "C:/Users/Ris/Videos/ClipCat", bufferDir: "C:/Users/Ris/AppData/Local/ClipCat/buffer",
   bufferSeconds: 150, bufferStorage: "memory", resolution: "1920x1080", fps: 60, bitrateMbps: 30, codec: "h264",
   captureMode: "monitor", monitorId: "", captureDesktop: true, micMode: "off", micDevice: "default", micPttVk: 192, micPttLabel: "ö", hotkeySave: "Alt+F10",
-  hotkeyRecord: "Alt+F9", hotkeyOpenFolder: "Alt+F11", hotkeyGallery: "Alt+KeyZ", showNotification: true,
+  hotkeyRecord: "Alt+F9", hotkeyReplay: "", hotkeyOpenFolder: "Alt+F11", hotkeyGallery: "Alt+KeyZ", showNotification: true,
   notificationSound: true, autostart: false, keepObsRunning: true, afkTimeoutSeconds: 0, replayEnabled: false, lastClip: null,
 };
 const status = { encoder: "obs_nvenc_h264_tex", bufferSeconds: 150, obsInstalled: true, obsRunning: true, replayEnabled: false, replayActive: false, afkPaused: false, bufferSince: 0, recording: false, recordingSince: 0, error: null };

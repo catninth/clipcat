@@ -72,6 +72,7 @@ struct Status {
 enum Action {
     Save,
     Record,
+    Replay,
     OpenFolder,
     Gallery,
 }
@@ -87,7 +88,7 @@ struct AppState {
     status: Mutex<Status>,
     shortcuts: Mutex<Vec<(Shortcut, Action)>>,
     /// Prevent native and polling hotkey events from executing the same keypress twice.
-    last_shortcut: Mutex<[Option<Instant>; 4]>,
+    last_shortcut: Mutex<[Option<Instant>; 5]>,
     /// State-dependent tray menu items: (recording, replay)
     tray_items: Mutex<Option<(MenuItem<Wry>, MenuItem<Wry>)>>,
     tray_labels: Mutex<Vec<(MenuItem<Wry>, &'static str)>>,
@@ -600,23 +601,31 @@ fn toggle_recording(app: &AppHandle, window: Option<platform::WindowInfo>) {
 
 /// Remember the choice and apply it on the next launch.
 fn set_replay(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    change_replay(app, Some(enabled))
+}
+
+/// Resolve toggles under the operations lock, including partial engine changes after an error.
+fn change_replay(app: &AppHandle, enabled: Option<bool>) -> Result<(), String> {
     let st = state(app);
     let operation = st.operations.lock().unwrap();
-    if st.save_in_progress.load(Ordering::SeqCst) {
-        return Err(t("engine.saveBusy"));
-    }
-    if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
-        return Err(t("update.busy"));
-    }
-    let result = match st.engine.lock().unwrap().as_mut() {
-        Some(engine) => engine.set_replay_enabled(enabled),
-        None => Err(t("error.engineNotRunning")),
-    };
-    {
-        let mut s = st.settings.lock().unwrap();
-        if result.is_ok() {
-            s.replay_enabled = enabled;
+    let mut engine = st.engine.lock().unwrap();
+    let enabled = enabled.unwrap_or_else(|| {
+        !engine.as_ref().map_or_else(|| st.settings.lock().unwrap().replay_enabled, Engine::replay_enabled)
+    });
+    let result = if st.save_in_progress.load(Ordering::SeqCst) {
+        Err(t("engine.saveBusy"))
+    } else if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
+        Err(t("update.busy"))
+    } else {
+        match engine.as_mut() {
+            Some(engine) => engine.set_replay_enabled(enabled),
+            None => Err(t("error.engineNotRunning")),
         }
+    };
+    drop(engine);
+    if result.is_ok() {
+        let mut s = st.settings.lock().unwrap();
+        s.replay_enabled = enabled;
         if let Err(e) = settings::save(&s) {
             logfile::write(&format!("Cannot save replay state: {e}"));
         }
@@ -626,6 +635,10 @@ fn set_replay(app: &AppHandle, enabled: bool) -> Result<(), String> {
         if enabled { "started" } else { "stopped" },
         result.as_ref().err().map_or(String::new(), |e| format!(" – error: {e}"))
     ));
+    match &result {
+        Ok(()) => show_toast(app, "ok", &t(if enabled { "toast.replayEnabled" } else { "toast.replayDisabled" }), ""),
+        Err(error) => show_toast(app, "error", &t("toast.replayFailed"), error),
+    }
     drop(operation);
     refresh_status(app);
     result
@@ -652,6 +665,7 @@ fn run_action(app: &AppHandle, action: Action) {
     logfile::write(match action {
         Action::Save => "Action: save",
         Action::Record => "Action: record",
+        Action::Replay => "Action: replay",
         Action::OpenFolder => "Action: open folder",
         Action::Gallery => "Action: gallery",
     });
@@ -664,6 +678,12 @@ fn run_action(app: &AppHandle, action: Action) {
             let app = app.clone();
             std::thread::spawn(move || toggle_recording(&app, window));
         }
+        Action::Replay => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = change_replay(&app, None);
+            });
+        }
         Action::OpenFolder => open_last_folder(app),
         Action::Gallery => show_main(app, "gallery"),
     }
@@ -675,6 +695,7 @@ fn run_shortcut_action(app: &AppHandle, action: Action) -> bool {
         Action::Record => 1,
         Action::OpenFolder => 2,
         Action::Gallery => 3,
+        Action::Replay => 4,
     };
     let st = state(app);
     let mut last = st.last_shortcut.lock().unwrap();
@@ -772,6 +793,7 @@ fn parse_hotkeys(s: &Settings) -> Result<Vec<(Shortcut, Action)>, String> {
     for (text, action, label) in [
         (&s.hotkey_save, Action::Save, "action.save"),
         (&s.hotkey_record, Action::Record, "action.record"),
+        (&s.hotkey_replay, Action::Replay, "action.replay"),
         (&s.hotkey_open_folder, Action::OpenFolder, "action.openFolder"),
         (&s.hotkey_gallery, Action::Gallery, "action.gallery"),
     ] {
@@ -789,6 +811,43 @@ fn parse_hotkeys(s: &Settings) -> Result<Vec<(Shortcut, Action)>, String> {
     Ok(list)
 }
 
+#[cfg(test)]
+mod hotkey_tests {
+    use super::*;
+
+    #[test]
+    fn replay_hotkey_can_be_unbound_or_custom() {
+        for hotkey in ["", "   "] {
+            let settings = Settings { hotkey_replay: hotkey.into(), ..Settings::default() };
+            let shortcuts = parse_hotkeys(&settings).unwrap();
+            assert_eq!(shortcuts.len(), 4);
+            assert!(!shortcuts.iter().any(|(_, action)| matches!(action, Action::Replay)));
+        }
+
+        let settings = Settings { hotkey_replay: "Ctrl+Shift+F12".into(), ..Settings::default() };
+        let shortcuts = parse_hotkeys(&settings).unwrap();
+        assert_eq!(shortcuts.len(), 5);
+        let expected: Shortcut = settings.hotkey_replay.parse().unwrap();
+        assert!(shortcuts.iter().any(|(shortcut, action)| *shortcut == expected && matches!(action, Action::Replay)));
+    }
+
+    #[test]
+    fn replay_hotkey_rejects_invalid_and_duplicate_bindings() {
+        let defaults = Settings::default();
+        for hotkey in [
+            &defaults.hotkey_save,
+            &defaults.hotkey_record,
+            &defaults.hotkey_open_folder,
+            &defaults.hotkey_gallery,
+        ] {
+            let settings = Settings { hotkey_replay: hotkey.clone(), ..defaults.clone() };
+            assert!(parse_hotkeys(&settings).is_err());
+        }
+        let invalid = Settings { hotkey_replay: "Alt+NotAKey".into(), ..defaults };
+        assert!(parse_hotkeys(&invalid).is_err());
+    }
+}
+
 /// Register hotkeys; skip and report any already claimed by another program.
 fn register_hotkeys(app: &AppHandle, s: &Settings) -> Result<(), String> {
     let list = parse_hotkeys(s)?;
@@ -802,9 +861,10 @@ fn register_hotkeys(app: &AppHandle, s: &Settings) -> Result<(), String> {
     }
     *state(app).shortcuts.lock().unwrap() = list;
     logfile::write(&format!(
-        "Hotkeys: save={} record={} folder={} gallery={}{}",
+        "Hotkeys: save={} record={} replay={} folder={} gallery={}{}",
         pretty_hotkey(&s.hotkey_save),
         pretty_hotkey(&s.hotkey_record),
+        pretty_hotkey(&s.hotkey_replay),
         pretty_hotkey(&s.hotkey_open_folder),
         pretty_hotkey(&s.hotkey_gallery),
         if failed.is_empty() {
@@ -895,13 +955,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "gallery" => show_main(app, "gallery"),
             "save" => run_action(app, Action::Save),
             "record" => run_action(app, Action::Record),
-            "replay" => {
-                let enabled = !state(app).status.lock().unwrap().replay_enabled;
-                let app = app.clone();
-                std::thread::spawn(move || {
-                    let _ = set_replay(&app, enabled);
-                });
-            }
+            "replay" => run_action(app, Action::Replay),
             "folder" => open_last_folder(app),
             "settings" => show_main(app, "settings"),
             "quit" => quit(app),
@@ -1321,7 +1375,7 @@ fn main() {
             selected_folders: Mutex::new(HashSet::new()),
             status: Mutex::new(Status::default()),
             shortcuts: Mutex::new(Vec::new()),
-            last_shortcut: Mutex::new([None; 4]),
+            last_shortcut: Mutex::new([None; 5]),
             tray_items: Mutex::new(None),
             tray_labels: Mutex::new(Vec::new()),
             engine: Mutex::new(None),

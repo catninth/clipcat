@@ -215,6 +215,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
   const hotkeyRows: [HotkeyField, string, string?][] = [
     ["hotkeySave", "settings.hotkeySave.label"],
     ["hotkeyRecord", "settings.hotkeyRecord.label", "settings.hotkeyRecord.hint"],
+    ["hotkeyReplay", "settings.hotkeyReplay.label", "settings.hotkeyReplay.hint"],
     ["hotkeyOpenFolder", "settings.hotkeyOpenFolder.label", "settings.hotkeyOpenFolder.hint"],
     ["hotkeyGallery", "settings.hotkeyGallery.label"],
   ];

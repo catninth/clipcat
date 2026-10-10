@@ -36,6 +36,7 @@ pub struct Settings {
     pub mic_ptt_label: String,
     pub hotkey_save: String,
     pub hotkey_record: String,
+    pub hotkey_replay: String,
     pub hotkey_open_folder: String,
     pub hotkey_gallery: String,
     pub show_notification: bool,
@@ -88,6 +89,7 @@ impl Default for Settings {
             mic_ptt_label: "ö".into(),
             hotkey_save: "Alt+F10".into(),
             hotkey_record: "Alt+F9".into(),
+            hotkey_replay: String::new(),
             hotkey_open_folder: "Alt+F11".into(),
             hotkey_gallery: "Alt+KeyZ".into(),
             show_notification: true,
@@ -275,6 +277,22 @@ fn save_to(settings: &Settings, path: &std::path::Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replay_hotkey_is_opt_in_and_custom_bindings_persist() {
+        assert!(Settings::default().hotkey_replay.is_empty());
+        let legacy = from_json(r#"{"hotkeySave":"Ctrl+F12","replayEnabled":true}"#);
+        assert!(legacy.hotkey_replay.is_empty());
+        assert_eq!(legacy.hotkey_save, "Ctrl+F12");
+        assert!(legacy.replay_enabled);
+
+        for hotkey in ["", "Ctrl+Shift+F12"] {
+            let settings = Settings { hotkey_replay: hotkey.into(), ..Settings::default() };
+            let json = serde_json::to_value(&settings).unwrap();
+            assert_eq!(json["hotkeyReplay"], hotkey);
+            assert_eq!(from_json(&json.to_string()), settings);
+        }
+    }
+
     #[test]
     fn existing_capture_behavior_is_preserved_and_new_installs_use_monitor_mode() {
         assert_eq!(Settings::default().capture_mode, "monitor");
