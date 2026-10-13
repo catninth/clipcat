@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.1 – 2026-10-13
+
+Changes since v0.8.0.
+
+### Fixed
+
+- Fix the License button to open ClipCat's license file.
+
+### Changed
+
+- Set the author name to Cat Ninth.
+
 ## 0.8.0 – 2026-10-10
 
 Changes since v0.7.0.
