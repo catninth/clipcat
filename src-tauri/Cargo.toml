@@ -10,7 +10,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 async-trait = "0.1"
-catninth-updater = { git = "https://github.com/catninth/updater", rev = "961fdabb33a461c9f1e5a46366e766b781be5c8b", features = ["tauri"] }
+catninth-updater = { git = "https://github.com/catninth/updater", rev = "84c3cdf9c79ba3df160bc681231288008253724a", features = ["tauri"] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"

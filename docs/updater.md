@@ -12,8 +12,11 @@ pinned in `src-tauri/Cargo.toml` and `Cargo.lock`; a sibling checkout is unneces
 - Public key and passive NSIS mode: `plugins.updater` in `tauri.conf.json`.
 - Request timeout: 120 seconds for metadata, manifests, and downloads.
 
-The library checks the latest stable GitHub release, compares semantic versions,
-and exposes its release body as patch notes. Pre-releases/nightlies are excluded.
+ClipCat uses the library's `GitHubManifestSource` to read the latest stable release's
+public `latest.json` asset, compare semantic versions, and expose its notes. This
+avoids the unauthenticated GitHub REST API's shared per-IP rate limit. The release
+workflow copies the same notes into the manifest and GitHub release body.
+Pre-releases/nightlies are excluded.
 On install, the Tauri adapter reads `latest.json` from the selected release tag and
 verifies that its version matches. The existing release workflow publishes the
 manifest, native bundles, and Minisign signatures. No signing-key rotation is needed.

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Check for updates using the public release manifest so exhausted GitHub REST API rate limits no longer block update discovery.
+
 ## 0.8.1 – 2026-10-13
 
 Changes since v0.8.0.

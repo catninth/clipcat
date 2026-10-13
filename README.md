@@ -93,8 +93,9 @@ The License button opens ClipCat's [MPL-2.0 license file](https://github.com/cat
 ## Releases and updates
 
 ClipCat uses the shared [`catninth-updater`](https://github.com/catninth/updater)
-Rust library. It checks stable releases from `catninth/clipcat` after 20 seconds,
-then every six hours, and displays the GitHub release body as patch notes.
+Rust library. It checks the public `latest.json` asset from `catninth/clipcat` after
+20 seconds, then every six hours, without using the rate-limited GitHub REST API.
+It displays the manifest's notes, which match the GitHub release body.
 Installation is user-triggered and uses the selected tag's `latest.json` manifest
 to locate packages and their Minisign signatures:
 NSIS on Windows, AppImage replacement or `.deb`/`.rpm` installation through `pkexec`

@@ -4,8 +4,8 @@ use crate::i18n::{t, tf};
 use crate::logfile;
 use async_trait::async_trait;
 use catninth_updater::{
-    tauri::TauriInstaller, Config, Error, Event, InstallHooks, InstallPermit, Phase, PollingHandle,
-    Release, Repository, Updater as SharedUpdater,
+    manifest::GitHubManifestSource, tauri::TauriInstaller, Config, Error, Event, InstallHooks,
+    InstallPermit, Phase, PollingHandle, Release, Repository, Updater as SharedUpdater,
 };
 use serde::Serialize;
 use std::sync::{atomic::Ordering, Arc, Mutex};
@@ -65,6 +65,7 @@ pub fn setup(app: &AppHandle) -> catninth_updater::Result<()> {
         CHECK_INTERVAL_MINUTES,
     )?
     .with_first_check_delay(FIRST_CHECK_DELAY)?;
+    let source = GitHubManifestSource::new(repository.clone(), config.request_timeout())?;
     let public_key = app
         .config()
         .plugins
@@ -81,6 +82,7 @@ pub fn setup(app: &AppHandle) -> catninth_updater::Result<()> {
     // Byte-level download events can be frequent; publish only visible UI changes.
     let last_state = Mutex::new(None);
     let shared = SharedUpdater::builder(config)
+        .source(Arc::new(source))
         .installer(Arc::new(installer))
         .hooks(Arc::new(CaptureHooks(app.clone())))
         .on_event(move |event| match event {
