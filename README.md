@@ -2,6 +2,19 @@
 
 ShadowPlay-style replay recorder with an embedded OBS capture engine, a clip gallery, and configurable recording controls.
 
+[License](LICENSE) · [Privacy notice](PRIVACY.md) · [Code signing policy](CODE_SIGNING.md)
+
+## License
+
+ClipCat's own source code is licensed under the [Mozilla Public License 2.0](LICENSE).
+Third-party components retain their own licenses; this does not relicense OBS/libobs,
+FFmpeg, vendored glib, or other dependencies. Windows packages include upstream OBS
+and FFmpeg binaries selected by [bundle-obs.ps1](bundle-obs.ps1); Linux packages use
+system OBS and FFmpeg. Consult the respective [OBS](https://github.com/obsproject/obs-studio),
+[FFmpeg](https://ffmpeg.org/legal.html), and
+[Windows FFmpeg build](https://github.com/GyanD/codexffmpeg) license and source notices,
+and the retained [vendored glib license](src-tauri/vendor/glib/LICENSE).
+
 ## Screenshots
 
 <p align="center">
@@ -75,14 +88,15 @@ switch languages without restarting.
 
 The **Info** section at the bottom of Settings contains the version, update check, license link,
 and GitHub icon. The repository is [catninth/clipcat](https://github.com/catninth/clipcat).
-The License button opens the specified [MPL-2.0 license file](https://github.com/catninth/cutcat/blob/main/LICENSE).
+The License button opens ClipCat's [MPL-2.0 license file](https://github.com/catninth/clipcat/blob/main/LICENSE).
 
 ## Releases and updates
 
 ClipCat uses the shared [`catninth-updater`](https://github.com/catninth/updater)
 Rust library. It checks stable releases from `catninth/clipcat` after 20 seconds,
 then every six hours, and displays the GitHub release body as patch notes.
-Installation is user-triggered and uses the selected tag's signed `latest.json`:
+Installation is user-triggered and uses the selected tag's `latest.json` manifest
+to locate packages and their Minisign signatures:
 NSIS on Windows, AppImage replacement or `.deb`/`.rpm` installation through `pkexec`
 on Linux. Recording and clip-saving guards remain in ClipCat.
 See [the updater integration guide](docs/updater.md) for configuration and lifecycle details.
@@ -101,6 +115,9 @@ The updater verifies packages with a minisign key. The public key is in `tauri.c
 the private key and its password are stored in the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. If the private key is lost, existing installations
 can no longer receive updates.
+
+These package signatures are separate from Windows Authenticode signing. See the
+[Code signing policy](CODE_SIGNING.md) for the current release configuration and its limits.
 
 ## Development
 
