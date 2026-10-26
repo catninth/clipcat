@@ -1,6 +1,6 @@
 # ClipCat privacy notice
 
-Last updated: 2026-10-13.
+Last updated: 2026-10-26.
 
 This notice describes the desktop application's current source configuration.
 ClipCat records and manages clips on your computer. It has no ClipCat account,
@@ -65,9 +65,13 @@ including when your system Videos folder has been redirected there.
 ## Network requests and third parties
 
 - **Update checks:** about 20 seconds after startup, then every six hours while
-  ClipCat is running, the shared updater requests release metadata for
-  `catninth/clipcat` from `api.github.com`. **Check for updates** makes an additional
-  request. The application does not configure a GitHub account or token for these
+  ClipCat is running, the current source requests the public `latest.json` asset at
+  `https://github.com/catninth/clipcat/releases/latest/download/latest.json`, following
+  redirects to GitHub's asset delivery hosts. This check does not use the GitHub
+  REST API. The published **v0.8.1** release instead requests release metadata from
+  `api.github.com`; the public-manifest change is unreleased as of this notice's date.
+  **Check for updates** makes an additional request. The application does not
+  configure a GitHub account or token for these
   requests. GitHub receives normal request information such as your IP address,
   requested URL and HTTP headers; the metadata client's User-Agent identifies
   `catninth-updater` and its version. Version comparison happens locally.
