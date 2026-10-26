@@ -1,6 +1,6 @@
 # ClipCat code signing policy
 
-Last updated: 2026-10-13.
+Last updated: 2026-10-26.
 
 This policy describes the current build and signing configuration in the official
 ClipCat repository. ClipCat uses Tauri updater signatures. The current release
@@ -17,9 +17,9 @@ artifacts from the checked-out repository revision on GitHub-hosted runners.
 Windows builds produce an NSIS installer; Linux builds produce AppImage, deb and
 rpm packages. The workflow runs the configured frontend and native checks, collects
 packages and signatures, writes `latest.json`, and attaches them to a GitHub release.
-Stable releases are manually dispatched with the `publish` input enabled. A daily
-scheduled run can publish a rolling `nightly` prerelease; the in-app updater follows
-stable releases and ignores nightly prereleases.
+Stable releases are manually dispatched with the `publish` input enabled. Scheduled
+nightly publication is currently disabled. The in-app updater follows stable
+releases and ignores any existing nightly prereleases.
 
 The Windows build includes prebuilt upstream OBS and FFmpeg components downloaded
 and hash-checked by [`bundle-obs.ps1`](bundle-obs.ps1). Those binaries are not built
@@ -53,7 +53,7 @@ Repository maintainers are responsible for changes to source, build scripts,
 dependency pins, release configuration, and access to the updater signing key.
 Contributors submit changes through the repository's normal contribution process.
 People with the necessary GitHub repository permissions can dispatch a stable
-release; scheduled nightly releases run automatically.
+release. Scheduled nightly publication is currently disabled.
 
 The checked-in release workflow does not configure a separate human approval for
 each signing operation. This document does not assert that branch protection,

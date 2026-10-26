@@ -1,19 +1,58 @@
-# clipcat
+# ClipCat — Open-source instant replay recorder
 
-ShadowPlay-style replay recorder with an embedded OBS capture engine, a clip gallery, and configurable recording controls.
+ClipCat by Cat Ninth is an open-source gameplay and screen recorder for Windows and Linux.
+Save recent gameplay with a hotkey using a rolling replay buffer, with a local clipping
+workflow similar to ShadowPlay Instant Replay or Medal.
 
-[License](LICENSE) · [Privacy notice](PRIVACY.md) · [Code signing policy](CODE_SIGNING.md)
+Choose RAM or disk buffering, set a replay length from 10 seconds to 20 minutes, and
+browse saved videos in the built-in clip gallery and player. Available memory, disk
+space, and time since capture started can limit the footage actually retained.
 
-## License
+No ClipCat account is required, and the app does not upload your clips. It does check
+GitHub for updates. ClipCat's own source is licensed under MPL-2.0; OBS, FFmpeg, and
+other dependencies retain their [own licenses](#license).
 
-ClipCat's own source code is licensed under the [Mozilla Public License 2.0](LICENSE).
-Third-party components retain their own licenses; this does not relicense OBS/libobs,
-FFmpeg, vendored glib, or other dependencies. Windows packages include upstream OBS
-and FFmpeg binaries selected by [bundle-obs.ps1](bundle-obs.ps1); Linux packages use
-system OBS and FFmpeg. Consult the respective [OBS](https://github.com/obsproject/obs-studio),
-[FFmpeg](https://ffmpeg.org/legal.html), and
-[Windows FFmpeg build](https://github.com/GyanD/codexffmpeg) license and source notices,
-and the retained [vendored glib license](src-tauri/vendor/glib/LICENSE).
+**[Download the latest release](https://github.com/catninth/clipcat/releases/latest)**
+· [Product page and user guide](https://catninth.com/guides/clipcat/)
+· [Screenshots](docs/gallery/README.md)
+· [FAQ](#faq)
+· [Privacy notice](PRIVACY.md)
+
+**Magyarul:** Nyílt forráskódú játékklip-rögzítő Windowsra és Linuxra.
+Gyorsbillentyűvel mentheted az előző másodpercek vagy percek eseményeit.
+A felület magyarul és angolul is használható.
+
+## Quick start: save your first clip
+
+1. Download and install the package for your system from the [latest release](https://github.com/catninth/clipcat/releases/latest).
+   See [platform support](#platform-support) below for Linux dependencies.
+2. Open **Settings**. Choose the **Save folder**, **Capture mode**, monitor, replay
+   length, and audio settings, then save. New installations use **Monitor capture**
+   with the microphone off; the selected display can include other apps and notifications.
+3. **Turn on the replay switch in the sidebar.** Replay is off on a new installation.
+   Wait for **Replay buffer running**, then let the buffer collect the moment you want
+   to keep. It cannot recover footage from before capture started.
+4. Press **Alt+F10** or select **Save now**. Wait for the save to finish, then open the
+   clip in **Gallery**. **Alt+F11** opens the latest clip's folder.
+
+For a full session, **Alt+F9** starts or stops manual recording independently of replay.
+Shortcuts are configurable under **Settings → Keyboard shortcuts**; see
+[Linux session limitations](docs/COMPATIBILITY.md#linux-capture-and-input) if a hotkey
+is unavailable. The [first-clip guide](https://catninth.com/guides/clipcat/first-clip/)
+walks through the workflow.
+
+## Platform support
+
+| Platform | Package on the release page | Capture requirements |
+| --- | --- | --- |
+| Windows x86_64 | `_x64-setup.exe` installer | Includes OBS capture components and FFmpeg; uses Microsoft WebView2. |
+| Linux x86_64 | `.deb`, `.rpm`, or `.AppImage` | Requires system OBS Studio, FFmpeg, and a compatible WebKitGTK 4.1 environment. An AppImage does not bundle away these requirements. |
+| macOS / ARM | No official package currently published | Not a verified release target. |
+
+Linux uses X11 screen capture or the Wayland PipeWire portal, without Windows-style
+capture hooks. Native Wayland applications have input and game-detection limitations.
+Read [compatibility and encoders](docs/COMPATIBILITY.md) before choosing a capture setup.
+Published packages and automated build checks are not a tested OS/GPU compatibility matrix.
 
 ## Screenshots
 
@@ -46,6 +85,81 @@ and the retained [vendored glib license](src-tauri/vendor/glib/LICENSE).
 </p>
 
 Screenshots show the English UI with sample clips and simulated capture state. See the gallery for all 28 images and capture details.
+
+## Why ClipCat?
+
+- **Keep a moment after it happens.** Enable replay once, then save the available
+  recent footage with a shortcut. [Replay controls](docs/gallery/recording/buffer-filling.png).
+- **Choose where the buffer lives.** Use RAM for a memory buffer or disk for rolling
+  segment files. Disk mode writes continuously and takes time to assemble a saved clip.
+  [Buffer settings](docs/gallery/settings/disk-buffer.png).
+- **Find and replay local clips.** Browse application groups and thumbnails, play a
+  video, or reveal it in your file manager. [Gallery](docs/gallery/gallery/overview.png)
+  and [player](docs/gallery/player/playback.png).
+
+## FAQ
+
+### Can I use ClipCat as an open-source ShadowPlay or Medal alternative?
+
+Yes, for the local instant replay workflow: keep recent footage buffered, save it with
+an adjustable hotkey, and review it in a gallery. It also supports manual recording,
+desktop audio, and an optional microphone. It does not provide a social feed, built-in
+clip uploads, or a timeline video editor. This is a description of ClipCat's scope,
+not a claim of feature parity with those products.
+
+### Where are my clips saved? Do I need an account?
+
+The default is a **ClipCat** folder inside your system Videos folder. Change it with
+**Settings → Save folder**. Clips are grouped by application and remain until you move
+or delete them; ClipCat does not automatically delete completed clips to reclaim space.
+There is no ClipCat account or built-in upload service. A cloud-synchronized save
+folder can still upload files through other software. See [Privacy](PRIVACY.md).
+
+### Does ClipCat work offline?
+
+Recording and local playback do not require a ClipCat account or upload service.
+The app makes automatic update requests to GitHub, so it is not network-silent.
+Update installation is user-triggered. See [Releases and updates](#releases-and-updates)
+for the distinction between released and unreleased updater behavior.
+
+### How long can I save, and which buffer should I use?
+
+The setting accepts **10–1200 seconds**. RAM is the default; its safe memory budget can
+shorten the actual replay length. Disk mode needs FFmpeg and writable storage, writes
+continuously, and needs additional space for completed clips. A newly started buffer
+only contains footage recorded since it started. See [buffer limits](docs/COMPATIBILITY.md#buffer-and-storage-limits).
+
+### Which GPU and Linux session should I use?
+
+The source selects NVENC on Windows and NVENC or VAAPI on Linux when available, with
+an x264 CPU fallback. That is an encoder selection policy, not verification of every
+GPU. The [compatibility guide](docs/COMPATIBILITY.md) describes the requirements,
+Wayland limits, and the evidence still needed for a hardware test matrix.
+
+### Is there a real capture demonstration?
+
+The [feature gallery](docs/gallery/README.md) shows the real interface with sample
+clips and simulated capture state. It does not verify live recording. Use the
+[replay demonstration checklist](docs/REPLAY_DEMO.md) to record and document an actual
+buffer → save → playback run, including the version, OS, GPU, and encoder.
+
+### Which ClipCat is this?
+
+This is **ClipCat by Cat Ninth**, maintained at
+[`catninth/clipcat`](https://github.com/catninth/clipcat): an OBS-powered game replay
+recorder built with Tauri, Rust, and React. Its project background has been described
+as “vibe-coded”; supported features and limits are documented here and in the source.
+
+## License
+
+ClipCat's own source code is licensed under the [Mozilla Public License 2.0](LICENSE).
+Third-party components retain their own licenses; this does not relicense OBS/libobs,
+FFmpeg, vendored glib, or other dependencies. Windows packages include upstream OBS
+and FFmpeg binaries selected by [bundle-obs.ps1](bundle-obs.ps1); Linux packages use
+system OBS and FFmpeg. Consult the respective [OBS](https://github.com/obsproject/obs-studio),
+[FFmpeg](https://ffmpeg.org/legal.html), and
+[Windows FFmpeg build](https://github.com/GyanD/codexffmpeg) license and source notices,
+and the retained [vendored glib license](src-tauri/vendor/glib/LICENSE).
 
 ## Recording controls
 
@@ -92,6 +206,12 @@ The License button opens ClipCat's [MPL-2.0 license file](https://github.com/cat
 
 ## Releases and updates
 
+Use [GitHub Releases](https://github.com/catninth/clipcat/releases/latest) for installers;
+you do not need the development toolchain below. The release history and
+[Changelog](CHANGELOG.md) separate published changes from **Unreleased** work.
+As of October 26, 2026, the latest stable release is **v0.8.1**. Its update checks use
+the GitHub REST API; the public-manifest change described below is still unreleased.
+
 ClipCat uses the shared [`catninth-updater`](https://github.com/catninth/updater)
 Rust library. It checks the public `latest.json` asset from `catninth/clipcat` after
 20 seconds, then every six hours, without using the rate-limited GitHub REST API.
@@ -110,7 +230,8 @@ To publish a new version:
    and provide English release notes following the format of previous releases.
    This creates a `v<version>` release with installers, signatures, and `latest.json`.
 
-The `release` workflow also creates a `nightly` prerelease every night; the updater ignores these.
+Scheduled nightly publication is currently disabled in the `release` workflow.
+Existing `nightly` prereleases are not stable releases and are ignored by the updater.
 
 The updater verifies packages with a minisign key. The public key is in `tauri.conf.json`;
 the private key and its password are stored in the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
@@ -150,3 +271,6 @@ run an installer, or overwrite the application's saved settings.
 
 For reproductions of the original audit findings, fixes, and test limitations, see
 [audit-verification.md](docs/audit-verification.md).
+
+For repository descriptions, topics, search checks, and maintainer guidance, see
+[Discoverability](docs/DISCOVERABILITY.md).
