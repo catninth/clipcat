@@ -209,8 +209,8 @@ The License button opens ClipCat's [MPL-2.0 license file](https://github.com/cat
 Use [GitHub Releases](https://github.com/catninth/clipcat/releases/latest) for installers;
 you do not need the development toolchain below. The release history and
 [Changelog](CHANGELOG.md) separate published changes from **Unreleased** work.
-As of October 26, 2026, the latest stable release is **v0.8.1**. Its update checks use
-the GitHub REST API; the public-manifest change described below is still unreleased.
+Starting with **v0.9.0**, update checks use the public release manifest described
+below. Earlier releases, including **v0.8.1**, use the GitHub REST API.
 
 ClipCat uses the shared [`catninth-updater`](https://github.com/catninth/updater)
 Rust library. It checks the public `latest.json` asset from `catninth/clipcat` after

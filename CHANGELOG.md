@@ -2,13 +2,35 @@
 
 ## Unreleased
 
+## 0.9.0 – 2026-11-02
+
+Changes since v0.8.1.
+
 ### Added
 
-- Remember the last microphone's device ID and name, warn when it is missing at startup or disconnects, and automatically reconnect the same input without interrupting video or desktop audio. The **System default** choice remembers its initial device instead of following later system-default changes.
+- Remember the last microphone's device ID and name across launches, and automatically reconnect the same input when it becomes available again.
+- Show a Hungarian or English warning modal when the microphone is missing at startup, disconnects, or cannot be restored. Each outage shows one warning, with a shortcut to Settings.
+
+### Changed
+
+- Check microphone availability every two seconds and restore the remembered device if the capture source changes unexpectedly.
+- Refresh the microphone list in Settings without discarding unsaved edits, and show the remembered name for disconnected inputs.
+- Keep the physical input initially selected through **System default** instead of following later system-default changes.
 
 ### Fixed
 
+- Prevent microphone recovery from silently switching to another input or interrupting video and desktop audio capture.
 - Check for updates using the public release manifest so exhausted GitHub REST API rate limits no longer block update discovery.
+
+### Compatibility
+
+- Preserve existing microphone selections and migrate older settings automatically. Microphone-off mode remains off; selecting a different input explicitly replaces the remembered device.
+- Identify microphones by device ID rather than display name so two devices with the same name cannot replace one another.
+
+### Tests
+
+- Add regression coverage for microphone persistence, default-device changes, disconnects, reconnection, capture isolation, source correction, and warning-modal lifecycle.
+- Verify the Hungarian warning and Settings layout in Chromium with a long device name and keyboard dismissal.
 
 ## 0.8.1 – 2026-10-13
 

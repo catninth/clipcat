@@ -1,6 +1,6 @@
 # ClipCat privacy notice
 
-Last updated: 2026-10-26.
+Last updated: 2026-11-02.
 
 This notice describes the desktop application's current source configuration.
 ClipCat records and manages clips on your computer. It has no ClipCat account,
@@ -21,8 +21,8 @@ and audio-device information for device selection. Global shortcut and push-to-t
 handling observes configured key/button states; optional AFK detection uses time
 since the last input event. It does not create a typed-text history.
 
-The application saves recording preferences, device identifiers, folder paths,
-shortcut bindings, language, replay state, and the last saved clip path in
+The application saves recording preferences, device identifiers, the remembered
+microphone name, folder paths, shortcut bindings, language, replay state, and the last saved clip path in
 `settings.json`. The gallery reads video paths, names, modification times and sizes,
 and generates JPEG thumbnails and duration metadata in the local webview's IndexedDB
 database named `clipcat`. No recordings, thumbnails, settings or diagnostic logs are
@@ -68,8 +68,8 @@ including when your system Videos folder has been redirected there.
   ClipCat is running, the current source requests the public `latest.json` asset at
   `https://github.com/catninth/clipcat/releases/latest/download/latest.json`, following
   redirects to GitHub's asset delivery hosts. This check does not use the GitHub
-  REST API. The published **v0.8.1** release instead requests release metadata from
-  `api.github.com`; the public-manifest change is unreleased as of this notice's date.
+  REST API. This behavior applies from **v0.9.0**; earlier releases, including
+  **v0.8.1**, instead request release metadata from `api.github.com`.
   **Check for updates** makes an additional request. The application does not
   configure a GitHub account or token for these
   requests. GitHub receives normal request information such as your IP address,
