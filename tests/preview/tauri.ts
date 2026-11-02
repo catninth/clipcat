@@ -1,14 +1,23 @@
-import type { Settings } from "../../ui/src/lib/tauri";
+import type { MicWarning, Settings } from "../../ui/src/lib/tauri";
 import hu from "../../ui/locales/hu.json";
 import en from "../../ui/locales/en-US.json";
+const params = new URLSearchParams(window.location.search);
+const micWarning: MicWarning | null = params.has("micWarning") ? {
+  id: 1,
+  deviceName: params.get("micName") || "Mikrofon (fifine Microphone)",
+  reason: params.get("micWarning") === "unavailable" ? "unavailable" : "missing",
+} : null;
 let settings: Settings = {
   language: "hu", outputDir: "C:/Users/Ris/Videos/ClipCat", bufferDir: "C:/Users/Ris/AppData/Local/ClipCat/buffer",
   bufferSeconds: 150, bufferStorage: "memory", resolution: "1920x1080", fps: 60, bitrateMbps: 30, codec: "h264",
-  captureMode: "monitor", monitorId: "", captureDesktop: true, micMode: "off", micDevice: "default", micPttVk: 192, micPttLabel: "ö", hotkeySave: "Alt+F10",
+  captureMode: "monitor", monitorId: "", captureDesktop: true, micMode: "off", micDevice: "default", lastMicDevice: "", lastMicName: "", micPttVk: 192, micPttLabel: "ö", hotkeySave: "Alt+F10",
   hotkeyRecord: "Alt+F9", hotkeyReplay: "", hotkeyOpenFolder: "Alt+F11", hotkeyGallery: "Alt+KeyZ", showNotification: true,
   notificationSound: true, autostart: false, keepObsRunning: true, afkTimeoutSeconds: 0, replayEnabled: false, lastClip: null,
 };
-const status = { encoder: "obs_nvenc_h264_tex", bufferSeconds: 150, obsInstalled: true, obsRunning: true, replayEnabled: false, replayActive: false, afkPaused: false, bufferSince: 0, recording: false, recordingSince: 0, error: null };
+if (micWarning) {
+  settings = { ...settings, micMode: "always", micDevice: "mic-disconnected", lastMicDevice: "mic-disconnected", lastMicName: micWarning.deviceName };
+}
+const status = { encoder: "obs_nvenc_h264_tex", bufferSeconds: 150, obsInstalled: true, obsRunning: true, replayEnabled: false, replayActive: false, afkPaused: false, bufferSince: 0, recording: false, recordingSince: 0, error: null, micWarning };
 export async function invoke(command: string, args?: Record<string, unknown>): Promise<unknown> {
   switch (command) {
     case "get_locale": return { lang: settings.language, messages: settings.language === "hu" ? hu : en };

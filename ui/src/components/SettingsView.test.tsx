@@ -22,7 +22,39 @@ export const settings = {
   hotkeySave: "Alt+F10", hotkeyRecord: "Alt+F9", hotkeyReplay: "", hotkeyOpenFolder: "Alt+F11", hotkeyGallery: "Alt+KeyZ",
   showNotification: true, notificationSound: true, autostart: true, keepObsRunning: true,
   afkTimeoutSeconds: 0, replayEnabled: false, lastClip: null,
+  lastMicDevice: "", lastMicName: "",
 } as Settings;
+
+it("refreshes microphone availability and remembered names without losing unsaved edits", async () => {
+  vi.useFakeTimers();
+  try {
+    i18n.lang = "en-US"; i18n.messages = en;
+    let mics: Mic[] = [];
+    const initial: Settings = { ...settings, language: "en-US", micMode: "always", micDevice: "usb-mic", lastMicDevice: "usb-mic", lastMicName: "USB microphone" };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "list_mics") return mics as never;
+      if (command === "list_monitors") return [] as never;
+      return false as never;
+    });
+    let view: ReturnType<typeof render>;
+    await act(async () => { view = render(<SettingsView settings={initial} onSaved={vi.fn()} onStatus={vi.fn()} update={null} />); });
+    const microphone = screen.getByRole("combobox", { name: en["settings.micDevice.label"] });
+    expect(microphone.textContent).toBe("USB microphone (unavailable)");
+    const bitrate = screen.getByRole("spinbutton", { name: en["settings.bitrate.input"] }) as HTMLInputElement;
+    fireEvent.change(bitrate, { target: { value: "37" } });
+    view!.rerender(<SettingsView settings={{ ...initial, lastMicName: "Renamed USB microphone" }} onSaved={vi.fn()} onStatus={vi.fn()} update={null} />);
+    expect(bitrate.value).toBe("37");
+    expect(microphone.textContent).toBe("Renamed USB microphone (unavailable)");
+    mics = [{ id: "usb-mic", name: "Renamed USB microphone", isDefault: false }];
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(microphone.textContent).toBe("Renamed USB microphone");
+    expect(bitrate.value).toBe("37");
+    expect((screen.getByRole("button", { name: en["settings.save"] }) as HTMLButtonElement).disabled).toBe(false);
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+  }
+});
 
 it("preserves a valid 5 Mbps setting when another preference is saved (audit 18)", async () => {
   i18n.messages = hu;

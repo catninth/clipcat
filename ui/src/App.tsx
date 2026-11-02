@@ -3,6 +3,7 @@ import { Gallery } from "./components/Gallery";
 import { Player } from "./components/Player";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
+import { MicrophoneWarning } from "./components/MicrophoneWarning";
 import { invoke, listen } from "./lib/tauri";
 import type { Clip, Settings, Status, UpdateState, View } from "./lib/tauri";
 import { pruneThumbs, thumbsReady, tileKey } from "./lib/thumbs";
@@ -30,12 +31,34 @@ export function App() {
   }, [showClips]);
 
   useEffect(() => {
-    invoke<Settings>("get_settings").then(setSettings);
-    invoke<Status>("get_status").then(setStatus);
     invoke<UpdateState>("get_update_state").then(setUpdate);
 
+    let alive = true;
+    let settingsEvents = 0;
+    const settingsListener = listen<Settings>("settings-changed", (e) => {
+      settingsEvents++;
+      if (alive) setSettings(e.payload);
+    });
+    void settingsListener.then(async () => {
+      const before = settingsEvents;
+      const initial = await invoke<Settings>("get_settings");
+      if (alive && before === settingsEvents) setSettings(initial);
+    });
+    let statusEvents = 0;
+    const statusListener = listen<Status>("status", (e) => {
+      statusEvents++;
+      if (alive) setStatus(e.payload);
+    });
+    // Register first so a startup warning cannot fall between the snapshot and subscription.
+    void statusListener.then(async () => {
+      const before = statusEvents;
+      const initial = await invoke<Status>("get_status");
+      if (alive && before === statusEvents) setStatus(initial);
+    });
+
     const unlisten = [
-      listen<Status>("status", (e) => setStatus(e.payload)),
+      statusListener,
+      settingsListener,
       listen("clip-saved", () => loadClips()),
       listen<View>("open-view", (e) => setView(e.payload)),
       listen<UpdateState>("update", (e) => setUpdate(e.payload)),
@@ -43,7 +66,7 @@ export function App() {
       // Stop playback when the window is hidden
       listen("main-hidden", () => setPlaying(null)),
     ];
-    return () => unlisten.forEach((p) => p.then((off) => off()));
+    return () => { alive = false; unlisten.forEach((p) => p.then((off) => off())); };
   }, [loadClips]);
 
   // Refresh the gallery every time it opens
@@ -79,6 +102,7 @@ export function App() {
         </main>
       </div>
       <Player clip={playing} onClose={closePlayer} onDelete={deleteClip} />
+      <MicrophoneWarning warning={status?.micWarning ?? null} onSettings={() => { setPlaying(null); setView("settings"); }} />
     </>
   );
 }

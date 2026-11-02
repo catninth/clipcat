@@ -59,6 +59,8 @@ interface Props {
 }
 
 export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
+  const latestSettings = useRef(settings);
+  latestSettings.current = settings;
   const [draft, setDraft] = useState<Settings | null>(null);
   const [customAfk, setCustomAfk] = useState(settings.afkTimeoutSeconds > 0 && !AFK_PRESETS.includes(settings.afkTimeoutSeconds));
   const [mics, setMics] = useState<Mic[]>([]);
@@ -91,12 +93,36 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
       setMics(mics);
       setDiskAvailable(disk);
       // Keep the saved bitrate within the supported range for the current FPS.
-      const max = MAX_BITRATE[settings.fps] ?? MAX_BITRATE[60];
-      setDraft({ ...settings, bitrateMbps: Math.min(max, Math.max(MIN_BITRATE, settings.bitrateMbps)) });
+      const current = latestSettings.current;
+      const max = MAX_BITRATE[current.fps] ?? MAX_BITRATE[60];
+      setDraft({ ...current, bitrateMbps: Math.min(max, Math.max(MIN_BITRATE, current.bitrateMbps)) });
     });
     return () => { alive = false; };
     // Load only on open; after saving, the draft is rebuilt from the updated settings
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let loading = false;
+    const timer = window.setInterval(async () => {
+      if (loading) return;
+      loading = true;
+      try {
+        const devices = await invoke<Mic[]>("list_mics");
+        if (alive) setMics(devices);
+      } catch {
+        // Keep the last known device list when enumeration temporarily fails.
+      } finally {
+        loading = false;
+      }
+    }, 2000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, []);
+
+  // Device discovery updates only backend-owned identity fields, never unsaved form edits.
+  useEffect(() => {
+    setDraft((current) => current && ({ ...current, lastMicDevice: settings.lastMicDevice, lastMicName: settings.lastMicName }));
+  }, [settings.lastMicDevice, settings.lastMicName]);
 
   useEffect(() => () => clearTimeout(messageTimer.current), []);
 
@@ -177,7 +203,12 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
     ]),
   ];
   // Keep the saved device selectable even if it is currently disconnected
-  if (!micOptions.some(([id]) => id === draft.micDevice)) micOptions.push([draft.micDevice, t("settings.micDevice.unavailable")]);
+  if (!micOptions.some(([id]) => id === draft.micDevice)) {
+    const remembered = draft.micDevice === draft.lastMicDevice && draft.lastMicName;
+    micOptions.push([draft.micDevice, remembered
+      ? t("settings.micDevice.unavailableName", { name: remembered })
+      : t("settings.micDevice.unavailable")]);
+  }
 
   const monitorMissing = !!draft.monitorId && !monitors.some((monitor) => monitor.deviceId === draft.monitorId);
   const monitorUnavailable = monitorMissing && !monitorsLoading && !monitorsFailed;
@@ -376,7 +407,10 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
               ]} />
           </Row>
           {draft.micMode !== "off" && (
-            <Row label={t("settings.micDevice.label")}>
+            <Row label={t("settings.micDevice.label")} hints={[
+              t("settings.micDevice.rememberHint"),
+              draft.micDevice === "default" && draft.lastMicName && t("settings.micDevice.remembered", { name: draft.lastMicName }),
+            ]}>
               <Select aria-label={t("settings.micDevice.label")} value={draft.micDevice} onValueChange={(value) => set("micDevice", value)}
                 options={micOptions.map(([value, label]) => ({ value, label }))} />
             </Row>

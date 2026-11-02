@@ -22,6 +22,8 @@ export interface Settings {
   afkTimeoutSeconds: number;
   micMode: "off" | "ptt" | "always";
   micDevice: string;
+  lastMicDevice: string;
+  lastMicName: string;
   micPttVk: number;
   micPttLabel: string;
   hotkeySave: string;
@@ -51,6 +53,13 @@ export interface Status {
   recording: boolean;
   recordingSince: number;
   error: string | null;
+  micWarning: MicWarning | null;
+}
+
+export interface MicWarning {
+  id: number;
+  deviceName: string;
+  reason: "missing" | "unavailable";
 }
 
 export interface Clip {

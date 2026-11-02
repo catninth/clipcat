@@ -14,7 +14,7 @@ it.each([false, true])("shows an AFK replay pause with manual recording active=%
   const status: Status = {
     encoder: "obs_nvenc_h264_tex", bufferSeconds: 150, obsInstalled: true, obsRunning: true,
     replayEnabled: true, replayActive: false, afkPaused: true, bufferSince: 0,
-    recording, recordingSince: recording ? Date.now() - 30000 : 0, error: null,
+    recording, recordingSince: recording ? Date.now() - 30000 : 0, error: null, micWarning: null,
   };
   render(<Sidebar view="gallery" onView={vi.fn()} settings={null} status={status} onStatus={vi.fn()} update={null} />);
   expect(screen.getByText(en["status.afkPaused"])).toBeTruthy();

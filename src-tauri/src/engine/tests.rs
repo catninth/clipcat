@@ -140,6 +140,7 @@ fn engine() -> Engine {
         display_item: null_mut(),
         desktop_audio: null_mut(),
         mic: null_mut(),
+        mic_available: true,
         video_encoder: null_mut(),
         audio_encoder: null_mut(),
         output: null_mut(),
@@ -518,6 +519,167 @@ fn afk_engine() -> Engine {
     e.config.mic_enabled = true;
     ENCODER.store(2, Ordering::SeqCst);
     e
+}
+
+static MIC_DATA: Mutex<String> = Mutex::new(String::new());
+static MIC_LIVE_DEVICE: Mutex<Option<CString>> = Mutex::new(None);
+static MIC_CREATED_DEVICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static MIC_LAST_MUTED: AtomicBool = AtomicBool::new(false);
+
+fn microphone_engine() -> Engine {
+    unsafe extern "C" fn set_string(_: Ptr, key: *const c_char, value: *const c_char) {
+        if CStr::from_ptr(key).to_bytes() == b"device_id" {
+            *MIC_DATA.lock().unwrap() = CStr::from_ptr(value).to_string_lossy().into_owned();
+        }
+    }
+    unsafe extern "C" fn source(_: *const c_char, name: *const c_char, _: Ptr, _: Ptr) -> Ptr {
+        if CStr::from_ptr(name).to_bytes() != b"Microphone" {
+            return 30 as Ptr;
+        }
+        if FAIL_AUDIO.load(Ordering::SeqCst) {
+            return null_mut();
+        }
+        let id = MIC_DATA.lock().unwrap().clone();
+        MIC_CREATED_DEVICES.lock().unwrap().push(id.clone());
+        *MIC_LIVE_DEVICE.lock().unwrap() = Some(cs(&id));
+        40 as Ptr
+    }
+    unsafe extern "C" fn settings(source: Ptr) -> Ptr {
+        assert_eq!(source as usize, 40);
+        100 as Ptr
+    }
+    unsafe extern "C" fn get_string(_: Ptr, _: *const c_char) -> *const c_char {
+        MIC_LIVE_DEVICE.lock().unwrap().as_ref().unwrap().as_ptr()
+    }
+    unsafe extern "C" fn muted(source: Ptr, muted: bool) {
+        assert_eq!(source as usize, 40);
+        MIC_LAST_MUTED.store(muted, Ordering::SeqCst);
+    }
+
+    let mut e = afk_engine();
+    let mut api = fake_api();
+    api.obs_enum_input_types = e.api.obs_enum_input_types;
+    api.obs_audio_encoder_create = e.api.obs_audio_encoder_create;
+    api.obs_output_create = e.api.obs_output_create;
+    api.obs_source_create = source;
+    api.obs_data_set_string = set_string;
+    api.obs_source_get_settings = settings;
+    api.obs_data_get_string = get_string;
+    api.obs_source_set_muted = muted;
+    e.api = Box::leak(Box::new(api));
+    e.mic_available = false;
+    MIC_DATA.lock().unwrap().clear();
+    *MIC_LIVE_DEVICE.lock().unwrap() = None;
+    MIC_CREATED_DEVICES.lock().unwrap().clear();
+    MIC_MUTED.store(true, Ordering::SeqCst);
+    e
+}
+
+#[test]
+fn microphone_never_opens_default_before_device_monitor_authorizes_an_endpoint() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let mut e = microphone_engine();
+    e.set_replay_enabled(true).unwrap();
+    for device in [None, Some("default"), Some(""), Some("bad\0id")] {
+        e.reconcile_mic(device).unwrap();
+        e.set_mic_enabled(true).unwrap();
+        e.check_resources().unwrap();
+        assert!(e.mic.is_null());
+        assert!(e.replay_active());
+    }
+    assert!(MIC_CREATED_DEVICES.lock().unwrap().is_empty());
+    assert!(e.reconcile_mic(Some("usb-microphone")).unwrap());
+    assert_eq!(MIC_CREATED_DEVICES.lock().unwrap().as_slice(), &["usb-microphone"]);
+    assert!(MIC_LAST_MUTED.load(Ordering::SeqCst), "reconnection preserves push-to-talk mute state");
+    assert!(!e.reconcile_mic(Some("usb-microphone")).unwrap());
+    assert_eq!(MIC_CREATED_DEVICES.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn microphone_disconnect_and_reconnect_preserve_manual_recording_and_replay() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let mut e = microphone_engine();
+    e.set_replay_enabled(true).unwrap();
+    e.reconcile_mic(Some("usb-microphone")).unwrap();
+    e.record_output = 20 as Ptr;
+    RECORD_ACTIVE.store(true, Ordering::SeqCst);
+    RECORDING_WANTED.store(true, Ordering::SeqCst);
+    let pipeline = (e.output, e.record_output, e.video_encoder, e.audio_encoder, e.desktop_audio, e.buffer_since);
+
+    assert!(e.reconcile_mic(None).unwrap());
+    assert!(e.mic.is_null());
+    assert_eq!(*MIC_SOURCE.lock().unwrap(), 0);
+    assert_eq!(RELEASED.load(Ordering::SeqCst), 1);
+    e.set_mic_enabled(true).unwrap();
+    e.check_resources().unwrap();
+    assert!(e.mic.is_null());
+    assert!(e.reconcile_mic(Some("usb-microphone")).unwrap());
+    assert_eq!(MIC_CREATED_DEVICES.lock().unwrap().as_slice(), &["usb-microphone", "usb-microphone"]);
+    assert_eq!((e.output, e.record_output, e.video_encoder, e.audio_encoder, e.desktop_audio, e.buffer_since), pipeline);
+    assert!(e.recording_active());
+    assert!(e.replay_active());
+    assert_eq!(RECORD_RELEASED.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn microphone_source_drift_is_repaired_even_when_configured_id_is_unchanged() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let mut e = microphone_engine();
+    e.set_replay_enabled(true).unwrap();
+    e.reconcile_mic(Some("usb-microphone")).unwrap();
+    *MIC_LIVE_DEVICE.lock().unwrap() = Some(cs("unexpected-microphone"));
+    assert!(e.reconcile_mic(Some("usb-microphone")).unwrap());
+    assert_eq!(e.mic_source_device().as_deref(), Some("usb-microphone"));
+    assert_eq!(MIC_CREATED_DEVICES.lock().unwrap().as_slice(), &["usb-microphone", "usb-microphone"]);
+    assert_eq!(RELEASED.load(Ordering::SeqCst), 1);
+    assert!(e.replay_active());
+}
+
+#[test]
+fn microphone_creation_failure_can_retry_without_restart_or_default_fallback() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let mut e = microphone_engine();
+    e.set_replay_enabled(true).unwrap();
+    FAIL_AUDIO.store(true, Ordering::SeqCst);
+    assert!(e.reconcile_mic(Some("usb-microphone")).is_err());
+    assert!(e.mic.is_null());
+    assert!(e.replay_active());
+    FAIL_AUDIO.store(false, Ordering::SeqCst);
+    assert!(e.reconcile_mic(Some("usb-microphone")).unwrap());
+    assert_eq!(MIC_CREATED_DEVICES.lock().unwrap().as_slice(), &["usb-microphone"]);
+}
+
+#[test]
+fn disabling_microphone_releases_it_even_when_desktop_audio_creation_fails() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let mut e = afk_engine();
+    e.set_replay_enabled(true).unwrap();
+    e.desktop_audio = null_mut();
+    FAIL_AUDIO.store(true, Ordering::SeqCst);
+    assert!(e.set_mic_enabled(false).is_err());
+    assert!(e.mic.is_null());
+    assert_eq!(*MIC_SOURCE.lock().unwrap(), 0);
+    assert_eq!(RELEASED.load(Ordering::SeqCst), 1);
+    assert!(e.replay_active());
+}
+
+#[test]
+fn microphone_enumeration_failure_is_distinct_from_no_available_devices() {
+    unsafe extern "C" fn properties(_: *const c_char) -> Ptr { 100 as Ptr }
+    unsafe extern "C" fn property(_: Ptr, _: *const c_char) -> Ptr { 200 as Ptr }
+
+    let _serial = TEST_LOCK.lock().unwrap();
+    let mut e = engine();
+    assert!(e.available_mics().is_err());
+    let mut api = fake_api();
+    api.obs_get_source_properties = properties;
+    e.api = Box::leak(Box::new(api));
+    assert!(e.available_mics().is_err());
+    let mut api = fake_api();
+    api.obs_get_source_properties = properties;
+    api.obs_properties_get = property;
+    e.api = Box::leak(Box::new(api));
+    assert!(e.available_mics().unwrap().is_empty());
 }
 
 #[test]

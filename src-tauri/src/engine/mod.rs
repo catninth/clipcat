@@ -492,6 +492,8 @@ pub struct Engine {
     display_item: Ptr,
     desktop_audio: Ptr,
     mic: Ptr,
+    /// Only the device monitor may authorize a concrete microphone endpoint.
+    mic_available: bool,
     video_encoder: Ptr,
     audio_encoder: Ptr,
     output: Ptr,
@@ -605,7 +607,8 @@ impl Engine {
             self.desktop_audio = null_mut();
         }
         let mut mic = MIC_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
-        if capturing && self.config.mic_enabled && self.mic.is_null() {
+        let mic_wanted = self.config.mic_enabled && self.mic_available;
+        if capturing && mic_wanted && self.mic.is_null() {
             self.mic = self.create_source(
                 sys::MIC_SOURCE,
                 "Microphone",
@@ -620,7 +623,7 @@ impl Engine {
                 (api.obs_set_output_source)(CHANNEL_MIC, self.mic);
             }
             *mic = self.mic as usize;
-        } else if (!capturing || !self.config.mic_enabled) && !self.mic.is_null() {
+        } else if (!capturing || !mic_wanted) && !self.mic.is_null() {
             *mic = 0;
             unsafe {
                 (api.obs_set_output_source)(CHANNEL_MIC, null_mut());
@@ -633,6 +636,10 @@ impl Engine {
 
     pub fn set_mic_enabled(&mut self, enabled: bool) -> Result<(), String> {
         self.config.mic_enabled = enabled;
+        if !enabled {
+            // An unrelated desktop-audio error must not leave a disabled microphone open.
+            self.release_mic();
+        }
         self.sync_audio()
     }
 
@@ -681,6 +688,7 @@ impl Engine {
             display_item: null_mut(),
             desktop_audio: null_mut(),
             mic: null_mut(),
+            mic_available: false,
             video_encoder: null_mut(),
             audio_encoder: null_mut(),
             output: null_mut(),
@@ -1201,55 +1209,101 @@ impl Engine {
         self.set_capture_mode(&config.capture_mode);
         self.set_desktop_visible(config.capture_desktop);
         if old.mic_device != config.mic_device {
-            self.update_mic(&config.mic_device);
+            // A changed device must be checked before a source can open it.
+            self.mic_available = false;
+            self.release_mic();
         }
         self.sync_audio()?;
         self.build_pipeline()
     }
 
-    /// Change the microphone without rebuilding the buffer.
-    pub fn set_mic_device(&mut self, device: &str) {
-        if self.config.mic_device != device {
-            self.config.mic_device = device.to_string();
-            self.update_mic(device);
-        }
-    }
-
-    fn update_mic(&self, device: &str) {
+    fn release_mic(&mut self) {
+        let mut mic = MIC_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
+        *mic = 0;
         if self.mic.is_null() {
             return;
         }
-        let settings = Data::new(self.api).str("device_id", device);
-        unsafe { (self.api.obs_source_update)(self.mic, settings.ptr) };
-        logfile::write(&format!("Microphone: {device}"));
+        unsafe {
+            (self.api.obs_set_output_source)(CHANNEL_MIC, null_mut());
+            (self.api.obs_source_release)(self.mic);
+        }
+        self.mic = null_mut();
+    }
+
+    fn mic_source_device(&self) -> Option<String> {
+        if self.mic.is_null() {
+            return None;
+        }
+        unsafe {
+            let settings = (self.api.obs_source_get_settings)(self.mic);
+            if settings.is_null() {
+                return None;
+            }
+            let id = (self.api.obs_data_get_string)(settings, c"device_id".as_ptr());
+            let id = (!id.is_null()).then(|| CStr::from_ptr(id).to_string_lossy().into_owned());
+            (self.api.obs_data_release)(settings);
+            id
+        }
+    }
+
+    /// Pin a verified endpoint, or release only microphone audio while it is unavailable.
+    /// Recreating the source also reconnects an unchanged ID after unplugging it.
+    pub fn reconcile_mic(&mut self, device: Option<&str>) -> Result<bool, String> {
+        // Never let OBS interpret a missing/invalid endpoint as the system default.
+        let device = device.filter(|id| !id.trim().is_empty() && *id != "default" && !id.contains('\0'));
+        let changed = self.mic_available != device.is_some()
+            || device.is_some_and(|id| {
+                self.config.mic_device != id
+                    || (!self.mic.is_null() && self.mic_source_device().as_deref() != Some(id))
+            });
+        if changed || device.is_none() {
+            self.release_mic();
+        }
+        if let Some(id) = device {
+            self.config.mic_device = id.to_owned();
+        }
+        self.mic_available = device.is_some();
+        let was_open = !self.mic.is_null();
+        self.sync_audio()?;
+        if changed && device.is_some() {
+            logfile::write(&format!("Microphone restored: {}", self.config.mic_device));
+        }
+        Ok(changed || (!was_open && !self.mic.is_null()))
     }
 
     /// Available microphones (ID, name), excluding the default device.
     pub fn list_mics(&self) -> Vec<(String, String)> {
+        self.available_mics().unwrap_or_default()
+    }
+
+    /// Preserve enumeration failures so the monitor can distinguish them from an empty list.
+    pub fn available_mics(&self) -> Result<Vec<(String, String)>, String> {
         let api = self.api;
         let mut list = Vec::new();
         unsafe {
             let props = (api.obs_get_source_properties)(cs(sys::MIC_SOURCE).as_ptr());
             if props.is_null() {
-                return list;
+                return Err(t("engine.micEnumeration"));
             }
             let prop = (api.obs_properties_get)(props, c"device_id".as_ptr());
-            if !prop.is_null() {
-                for i in 0..(api.obs_property_list_item_count)(prop) {
-                    let id = (api.obs_property_list_item_string)(prop, i);
-                    let name = (api.obs_property_list_item_name)(prop, i);
-                    if id.is_null() || name.is_null() {
-                        continue;
-                    }
-                    let id = CStr::from_ptr(id).to_string_lossy().into_owned();
-                    if id != "default" {
-                        list.push((id, CStr::from_ptr(name).to_string_lossy().into_owned()));
-                    }
+            if prop.is_null() {
+                (api.obs_properties_destroy)(props);
+                return Err(t("engine.micEnumeration"));
+            }
+            for i in 0..(api.obs_property_list_item_count)(prop) {
+                let id = (api.obs_property_list_item_string)(prop, i);
+                let name = (api.obs_property_list_item_name)(prop, i);
+                if id.is_null() || name.is_null() {
+                    continue;
+                }
+                let id = CStr::from_ptr(id).to_string_lossy().into_owned();
+                if !id.trim().is_empty() && id != "default" {
+                    list.push((id, CStr::from_ptr(name).to_string_lossy().into_owned()));
                 }
             }
             (api.obs_properties_destroy)(props);
         }
-        list
+        Ok(list)
     }
 
     /// Restart the buffer with unchanged settings (e.g. after an error stops it).

@@ -4,6 +4,7 @@ mod afk;
 mod clips;
 mod engine;
 mod media;
+mod microphone;
 use clips::Clip;
 mod games;
 mod i18n;
@@ -64,6 +65,7 @@ struct Status {
     /// Manual recording start (Unix ms), or 0 if not running
     recording_since: u64,
     error: Option<String>,
+    mic_warning: Option<microphone::Warning>,
     encoder: String,
     buffer_seconds: u32,
 }
@@ -94,6 +96,8 @@ struct AppState {
     tray_labels: Mutex<Vec<(MenuItem<Wry>, &'static str)>>,
     engine: Mutex<Option<Engine>>,
     engine_error: Mutex<Option<String>>,
+    mic_warning: Mutex<microphone::WarningTracker>,
+    mic_settings_dirty: AtomicBool,
     /// Folder for the foreground application when saving was requested (the save completes later).
     pending_folder: Mutex<Option<String>>,
     /// Manual recordings awaiting finalization, grouped when stopping was requested.
@@ -151,7 +155,7 @@ fn engine_config(s: &Settings) -> engine::Config {
         capture_mode: s.capture_mode.clone(),
         capture_desktop: s.capture_desktop,
         monitor_id: monitor.map(|m| m.device_id).unwrap_or_default(),
-        mic_device: s.mic_device.clone(),
+        mic_device: microphone::preferred_device(s).unwrap_or("default").to_string(),
         mic_enabled: s.mic_mode != "off",
     }
 }
@@ -164,6 +168,90 @@ fn apply_mic_settings(s: &Settings) {
     };
     PTT_VK.store(s.mic_ptt_vk, Ordering::SeqCst);
     MIC_MODE.store(mode, Ordering::SeqCst);
+    engine::set_mic_muted(mode != MIC_ALWAYS);
+}
+
+/// Check identity before allowing OBS to open a microphone. A missing input never follows defaults.
+fn sync_engine_microphone(engine: &mut Engine, settings: &mut Settings) -> Result<bool, String> {
+    if settings.mic_mode == "off" {
+        engine.set_mic_enabled(false)?;
+        engine.reconcile_mic(None)?;
+        return Ok(true);
+    }
+    let result = (|| {
+        let devices = engine.available_mics()?;
+        let default_id = if microphone::preferred_device(settings).is_none() {
+            platform::default_mic_id()
+        } else {
+            None
+        };
+        let device = microphone::reconcile_selection(settings, &devices, default_id.as_deref());
+        engine.reconcile_mic(device.as_deref())?;
+        engine.set_mic_enabled(true)?;
+        Ok(device.is_some())
+    })();
+    if result.is_err() {
+        // Keep video and desktop audio running while microphone discovery or creation is retried.
+        let _ = engine.reconcile_mic(None);
+    }
+    result
+}
+
+/// Called with the operations lock held, including while replay is paused and the window is hidden.
+fn sync_microphone(app: &AppHandle) {
+    let st = state(app);
+    if st.quitting.load(Ordering::SeqCst) || st.installing.load(Ordering::SeqCst) {
+        return;
+    }
+    let mut settings = current_settings(app);
+    let result = {
+        let mut slot = st.engine.lock().unwrap();
+        let Some(engine) = slot.as_mut() else { return };
+        sync_engine_microphone(engine, &mut settings)
+    };
+    let changed = {
+        let mut current = st.settings.lock().unwrap();
+        let changed = current.last_mic_device != settings.last_mic_device || current.last_mic_name != settings.last_mic_name;
+        if changed {
+            current.last_mic_device.clone_from(&settings.last_mic_device);
+            current.last_mic_name.clone_from(&settings.last_mic_name);
+            st.mic_settings_dirty.store(true, Ordering::SeqCst);
+        }
+        if st.mic_settings_dirty.load(Ordering::SeqCst) {
+            match settings::save(&current) {
+                Ok(()) => st.mic_settings_dirty.store(false, Ordering::SeqCst),
+                Err(error) if changed => logfile::write(&format!("Cannot remember microphone: {error}")),
+                Err(_) => (),
+            }
+        }
+        changed
+    };
+    if changed {
+        let _ = app.emit("settings-changed", &settings);
+    }
+    let reason = match &result {
+        Ok(true) => None,
+        Ok(false) => Some("missing"),
+        Err(_) => Some("unavailable"),
+    };
+    let device = microphone::preferred_device(&settings).unwrap_or("default");
+    let name = if settings.last_mic_device == device && !settings.last_mic_name.is_empty() {
+        settings.last_mic_name.clone()
+    } else if device == "default" {
+        t("microphone.defaultName")
+    } else {
+        device.to_string()
+    };
+    let new_warning = st.mic_warning.lock().unwrap().update(device, &name, reason);
+    if new_warning {
+        logfile::write(&format!("Microphone unavailable: {device} ({name}); {result:?}"));
+        // A persisted status warning survives frontend startup and does not depend on toast preferences.
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }
 }
 
 /// Push-to-talk: the microphone is audible only while the key is held and briefly afterward.
@@ -421,6 +509,7 @@ fn sync_afk(app: &AppHandle) {
 fn refresh_status(app: &AppHandle) {
     let st = state(app);
     let Ok(_operation) = st.operations.try_lock() else { return };
+    sync_microphone(app);
     sync_afk(app);
     if let Some(engine) = st.engine.lock().unwrap().as_mut() {
         if let Err(error) = engine.check_resources() {
@@ -482,6 +571,7 @@ fn refresh_status(app: &AppHandle) {
         recording,
         recording_since,
         error: st.engine_error.lock().unwrap().clone(),
+        mic_warning: st.mic_warning.lock().unwrap().warning().cloned(),
         encoder,
         buffer_seconds,
     };
@@ -1037,10 +1127,11 @@ async fn save_settings(app: AppHandle, settings: Settings) -> Result<String, Str
         if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
             return Err(t("update.busy"));
         }
-        settings.validate()?;
-        parse_hotkeys(&settings)?;
         let old = current_settings(&handle);
         let mut new = settings;
+        microphone::prepare_settings(&old, &mut new);
+        new.validate()?;
+        parse_hotkeys(&new)?;
         for (previous, next) in [(&old.output_dir, &new.output_dir), (&old.buffer_dir, &new.buffer_dir)] {
             if previous != next {
                 let canonical = Path::new(next).canonicalize().map_err(|e| e.to_string())?;
@@ -1061,34 +1152,38 @@ async fn save_settings(app: AppHandle, settings: Settings) -> Result<String, Str
         let mut slot = st.engine.lock().unwrap();
         if let Some(engine) = slot.as_mut() {
             if rebuild {
-                engine.apply(&engine_config(&new))?;
-            } else {
-                engine.set_desktop_visible(new.capture_desktop);
-                engine.set_mic_device(&new.mic_device);
-                if let Err(error) = engine.set_mic_enabled(new.mic_mode != "off") {
-                    engine.set_desktop_visible(old.capture_desktop);
-                    engine.set_mic_device(&old.mic_device);
-                    let _ = engine.set_mic_enabled(old.mic_mode != "off");
+                if let Err(error) = engine.apply(&engine_config(&new)) {
+                    let _ = sync_engine_microphone(engine, &mut old.clone());
                     return Err(error);
                 }
+            } else {
+                engine.set_desktop_visible(new.capture_desktop);
             }
         } else if rebuild && engine::engine_available() {
             *slot = Some(Engine::start(&engine_config(&new), new.replay_enabled)?);
         }
+        apply_mic_settings(&new);
+        if let Some(engine) = slot.as_mut() {
+            // Missing microphones are a recoverable warning, not a reason to reject settings.
+            if let Err(error) = sync_engine_microphone(engine, &mut new) {
+                logfile::write(&format!("Microphone settings could not be applied: {error}"));
+            }
+        }
         if let Err(error) = settings::save(&new) {
+            apply_mic_settings(&old);
             if let Some(engine) = slot.as_mut() {
                 if rebuild {
                     let _ = engine.apply(&engine_config(&old));
                 } else {
                     engine.set_desktop_visible(old.capture_desktop);
-                    engine.set_mic_device(&old.mic_device);
-                    let _ = engine.set_mic_enabled(old.mic_mode != "off");
                 }
+                let _ = sync_engine_microphone(engine, &mut old.clone());
             }
             return Err(tf("error.settingsSave", &[("error", &error)]));
         }
         drop(slot);
         *st.settings.lock().unwrap() = new.clone();
+        st.mic_settings_dirty.store(false, Ordering::SeqCst);
         *st.engine_error.lock().unwrap() = None;
         i18n::set_language(&new.language);
         apply_mic_settings(&new);
@@ -1306,6 +1401,10 @@ fn run_selftest(dir: &str, seconds: u64) -> i32 {
             return 1;
         }
     };
+    apply_mic_settings(&s);
+    if let Err(error) = sync_engine_microphone(&mut engine, &mut s) {
+        logfile::write(&format!("Self-test microphone unavailable: {error}"));
+    }
     std::thread::sleep(Duration::from_secs(seconds));
     let active = engine.replay_active();
     let result = engine.save().and_then(|_| {
@@ -1380,6 +1479,8 @@ fn main() {
             tray_labels: Mutex::new(Vec::new()),
             engine: Mutex::new(None),
             engine_error: Mutex::new(None),
+            mic_warning: Mutex::new(microphone::WarningTracker::default()),
+            mic_settings_dirty: AtomicBool::new(false),
             pending_folder: Mutex::new(None),
             pending_recording_folders: Mutex::new(HashMap::new()),
             last_recover: Mutex::new(None),

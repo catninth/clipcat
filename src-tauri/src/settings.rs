@@ -31,6 +31,10 @@ pub struct Settings {
     pub mic_mode: String,
     /// Audio system device ID; "default" = the system's default microphone
     pub mic_device: String,
+    /// Last resolved physical input, retained when the system default changes or disappears.
+    pub last_mic_device: String,
+    /// Display label only; devices are matched by their stable platform ID.
+    pub last_mic_name: String,
     /// Windows virtual-key code (the UI's KeyboardEvent.keyCode; 0x04-0x06: middle/side mouse buttons)
     pub mic_ptt_vk: u32,
     pub mic_ptt_label: String,
@@ -84,6 +88,8 @@ impl Default for Settings {
             capture_desktop: true,
             mic_mode: "off".into(),
             mic_device: "default".into(),
+            last_mic_device: String::new(),
+            last_mic_name: String::new(),
             // Legacy ShadowPlay push-to-talk key (VK_OEM_3, "ö" on a Hungarian keyboard)
             mic_ptt_vk: 0xC0,
             mic_ptt_label: "ö".into(),
@@ -168,6 +174,14 @@ impl Settings {
         if self.mic_device.trim().is_empty() || self.mic_device.contains('\0') {
             return Err(t("validate.micDevice"));
         }
+        if (!self.last_mic_device.is_empty()
+            && (self.last_mic_device.trim().is_empty() || self.last_mic_device == "default"))
+            || self.last_mic_device.contains('\0')
+            || self.last_mic_name.contains('\0')
+            || (self.last_mic_device.is_empty() && !self.last_mic_name.is_empty())
+        {
+            return Err(t("validate.micDevice"));
+        }
         if self.mic_mode == "ptt" && !is_ptt_key_supported(self.mic_ptt_vk) {
             return Err(t("validate.pttKey"));
         }
@@ -250,6 +264,12 @@ fn from_json(json: &str) -> Settings {
     if s.mic_device.trim().is_empty() || s.mic_device.contains('\0') {
         s.mic_device = defaults.mic_device;
     }
+    if s.last_mic_device.trim().is_empty() || s.last_mic_device == "default" || s.last_mic_device.contains('\0') {
+        s.last_mic_device.clear();
+        s.last_mic_name.clear();
+    } else if s.last_mic_name.contains('\0') {
+        s.last_mic_name.clear();
+    }
     if !is_ptt_key_supported(s.mic_ptt_vk) {
         s.mic_ptt_vk = defaults.mic_ptt_vk;
         s.mic_ptt_label = defaults.mic_ptt_label;
@@ -277,6 +297,51 @@ fn save_to(settings: &Settings, path: &std::path::Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remembered_microphone_migrates_and_persists_without_rebuilding_capture() {
+        let legacy = from_json(r#"{"micMode":"always","micDevice":"headset-id"}"#);
+        assert_eq!(legacy.mic_device, "headset-id");
+        assert!(legacy.last_mic_device.is_empty());
+        assert!(legacy.last_mic_name.is_empty());
+
+        let remembered = Settings {
+            last_mic_device: "headset-id".into(),
+            last_mic_name: "USB headset".into(),
+            ..legacy.clone()
+        };
+        let serialized = serde_json::to_value(&remembered).unwrap();
+        assert_eq!(serialized["lastMicDevice"], "headset-id");
+        assert_eq!(serialized["lastMicName"], "USB headset");
+        assert_eq!(from_json(&serialized.to_string()), remembered);
+        assert_eq!(legacy.pipeline_fingerprint(), remembered.pipeline_fingerprint());
+    }
+
+    #[test]
+    fn invalid_remembered_microphone_metadata_is_rejected_and_repaired() {
+        for device in ["", " ", "default", "bad\0id"] {
+            let invalid = Settings {
+                last_mic_device: device.into(),
+                last_mic_name: "Stale name".into(),
+                ..Settings::default()
+            };
+            assert!(invalid.validate().is_err());
+            let repaired = from_json(&serde_json::to_string(&invalid).unwrap());
+            assert!(repaired.last_mic_device.is_empty());
+            assert!(repaired.last_mic_name.is_empty());
+            assert!(repaired.validate().is_ok());
+        }
+        let invalid_name = Settings {
+            last_mic_device: "headset-id".into(),
+            last_mic_name: "bad\0name".into(),
+            ..Settings::default()
+        };
+        assert!(invalid_name.validate().is_err());
+        let repaired = from_json(&serde_json::to_string(&invalid_name).unwrap());
+        assert_eq!(repaired.last_mic_device, "headset-id");
+        assert!(repaired.last_mic_name.is_empty());
+        assert!(repaired.validate().is_ok());
+    }
+
     #[test]
     fn replay_hotkey_is_opt_in_and_custom_bindings_persist() {
         assert!(Settings::default().hotkey_replay.is_empty());

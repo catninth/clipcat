@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Remember the last microphone's device ID and name, warn when it is missing at startup or disconnects, and automatically reconnect the same input without interrupting video or desktop audio. The **System default** choice remembers its initial device instead of following later system-default changes.
+
 ### Fixed
 
 - Check for updates using the public release manifest so exhausted GitHub REST API rate limits no longer block update discovery.
