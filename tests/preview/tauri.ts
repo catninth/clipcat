@@ -10,7 +10,7 @@ const micWarning: MicWarning | null = params.has("micWarning") ? {
 let settings: Settings = {
   language: "hu", outputDir: "C:/Users/Ris/Videos/ClipCat", bufferDir: "C:/Users/Ris/AppData/Local/ClipCat/buffer",
   bufferSeconds: 150, bufferStorage: "memory", resolution: "1920x1080", fps: 60, bitrateMbps: 30, codec: "h264",
-  captureMode: "monitor", monitorId: "", captureDesktop: true, micMode: "off", micDevice: "default", lastMicDevice: "", lastMicName: "", micPttVk: 192, micPttLabel: "ö", hotkeySave: "Alt+F10",
+  captureMode: "monitor", monitorId: "", captureDesktop: true, micMode: "off", micDevice: "default", lastMicDevice: "", lastMicName: "", micVolume: 100, micPttVk: 192, micPttLabel: "ö", hotkeySave: "Alt+F10",
   hotkeyRecord: "Alt+F9", hotkeyReplay: "", hotkeyOpenFolder: "Alt+F11", hotkeyGallery: "Alt+KeyZ", showNotification: true,
   notificationSound: true, autostart: false, keepObsRunning: true, afkTimeoutSeconds: 0, replayEnabled: false, lastClip: null,
 };

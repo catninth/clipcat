@@ -6,7 +6,8 @@ import { cx, formatDuration, prettyHotkey } from "../lib/format";
 import { loadLocale, t } from "../lib/i18n";
 import { invoke } from "../lib/tauri";
 import type { HotkeyField, Mic, Monitor, Settings, Status, UpdateState } from "../lib/tauri";
-import { Button, Card, Keycap, Range, Row, Select, Switch, TextInput } from "./ui";
+import { Button, Card, Keycap, Range, Row, Select, Switch, TextInput, Value } from "./ui";
+import { MicTest } from "./MicTest";
 import { installUpdate, isInstallable, updateProgressText } from "./updates";
 import { GithubIcon } from "./icons";
 
@@ -19,6 +20,7 @@ const MIN_BUFFER_SECONDS = 10;
 const MAX_BUFFER_SECONDS = 1200;
 const MIN_AFK_SECONDS = 10;
 const MAX_AFK_SECONDS = 86400;
+const MAX_MIC_VOLUME = 200;
 const AFK_PRESETS = [600, 1800, 3600, 7200, 10800];
 
 const integerInRange = (value: number, min: number, max: number) => Number.isInteger(value) && value >= min && value <= max;
@@ -210,7 +212,12 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
       : t("settings.micDevice.unavailable")]);
   }
 
-  const monitorMissing = !!draft.monitorId && !monitors.some((monitor) => monitor.deviceId === draft.monitorId);
+  // The remembered physical device is what "System default" resolves to once it has been picked
+  const micTestName = draft.micDevice === "default"
+    ? draft.lastMicName || null
+    : mics.find((m) => m.id === draft.micDevice)?.name ?? (draft.micDevice === draft.lastMicDevice ? draft.lastMicName || null : null);
+
+  const monitorMissing =!!draft.monitorId && !monitors.some((monitor) => monitor.deviceId === draft.monitorId);
   const monitorUnavailable = monitorMissing && !monitorsLoading && !monitorsFailed;
 
   const hotkeyCapture = (field: HotkeyField) => (captured: Captured) => {
@@ -413,6 +420,18 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
             ]}>
               <Select aria-label={t("settings.micDevice.label")} value={draft.micDevice} onValueChange={(value) => set("micDevice", value)}
                 options={micOptions.map(([value, label]) => ({ value, label }))} />
+            </Row>
+          )}
+          {draft.micMode !== "off" && (
+            <Row label={t("settings.micVolume.label")} hints={[t("settings.micVolume.hint")]}>
+              <Range aria-label={t("settings.micVolume.label")} min={0} max={MAX_MIC_VOLUME} step={1}
+                value={draft.micVolume} onChange={(e) => set("micVolume", Number(e.target.value))} />
+              <Value>{draft.micVolume}%</Value>
+            </Row>
+          )}
+          {draft.micMode !== "off" && (
+            <Row label={t("settings.micTest.label")} hints={[t("settings.micTest.hint")]}>
+              <MicTest deviceName={micTestName} volume={draft.micVolume} />
             </Row>
           )}
           {draft.micMode === "ptt" && (

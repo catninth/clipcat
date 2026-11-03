@@ -24,6 +24,7 @@ export interface Settings {
   micDevice: string;
   lastMicDevice: string;
   lastMicName: string;
+  micVolume: number;
   micPttVk: number;
   micPttLabel: string;
   hotkeySave: string;

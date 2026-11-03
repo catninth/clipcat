@@ -35,6 +35,8 @@ pub struct Settings {
     pub last_mic_device: String,
     /// Display label only; devices are matched by their stable platform ID.
     pub last_mic_name: String,
+    /// Microphone loudness in clips, in percent; 100 = unchanged
+    pub mic_volume: u32,
     /// Windows virtual-key code (the UI's KeyboardEvent.keyCode; 0x04-0x06: middle/side mouse buttons)
     pub mic_ptt_vk: u32,
     pub mic_ptt_label: String,
@@ -90,6 +92,7 @@ impl Default for Settings {
             mic_device: "default".into(),
             last_mic_device: String::new(),
             last_mic_name: String::new(),
+            mic_volume: 100,
             // Legacy ShadowPlay push-to-talk key (VK_OEM_3, "ö" on a Hungarian keyboard)
             mic_ptt_vk: 0xC0,
             mic_ptt_label: "ö".into(),
@@ -182,6 +185,9 @@ impl Settings {
         {
             return Err(t("validate.micDevice"));
         }
+        if !(0..=MAX_MIC_VOLUME).contains(&self.mic_volume) {
+            return Err(tf("validate.micVolume", &[("max", &MAX_MIC_VOLUME)]));
+        }
         if self.mic_mode == "ptt" && !is_ptt_key_supported(self.mic_ptt_vk) {
             return Err(t("validate.pttKey"));
         }
@@ -192,6 +198,7 @@ impl Settings {
 pub const MIN_BITRATE_MBPS: u32 = 5;
 pub const MIN_AFK_SECONDS: u32 = 10;
 pub const MAX_AFK_SECONDS: u32 = 86_400;
+pub const MAX_MIC_VOLUME: u32 = 200;
 
 /// Maximum bitrate for the frame rate; at low FPS, higher values only increase file size,
 /// not image quality. The UI (ui/app.js) uses the same table.
@@ -270,6 +277,7 @@ fn from_json(json: &str) -> Settings {
     } else if s.last_mic_name.contains('\0') {
         s.last_mic_name.clear();
     }
+    s.mic_volume = s.mic_volume.min(MAX_MIC_VOLUME);
     if !is_ptt_key_supported(s.mic_ptt_vk) {
         s.mic_ptt_vk = defaults.mic_ptt_vk;
         s.mic_ptt_label = defaults.mic_ptt_label;
