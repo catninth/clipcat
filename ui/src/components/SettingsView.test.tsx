@@ -18,7 +18,7 @@ function chooseOption(combobox: HTMLElement, name: string | RegExp) {
 export const settings = {
   language: "hu", outputDir: "C:/Clips", bufferDir: "C:/Buffer", bufferSeconds: 150,
   bufferStorage: "memory", resolution: "1920x1080", fps: 60, bitrateMbps: 5, codec: "h264",
-  captureMode: "monitor", monitorId: "", captureDesktop: true, micMode: "off", micDevice: "default", micPttVk: 192, micPttLabel: "ö",
+  captureMode: "monitor", monitorId: "", captureDesktop: true, micMode: "off", micDevice: "default", micVolume: 100, micPttVk: 192, micPttLabel: "ö",
   hotkeySave: "Alt+F10", hotkeyRecord: "Alt+F9", hotkeyReplay: "", hotkeyOpenFolder: "Alt+F11", hotkeyGallery: "Alt+KeyZ",
   showNotification: true, notificationSound: true, autostart: true, keepObsRunning: true,
   afkTimeoutSeconds: 0, replayEnabled: false, lastClip: null,

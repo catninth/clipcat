@@ -17,7 +17,7 @@ mod disk;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -137,6 +137,7 @@ obs_api! {
     obs_source_release: fn(Ptr);
     obs_source_update: fn(Ptr, Ptr);
     obs_source_set_muted: fn(Ptr, bool);
+    obs_source_set_volume: fn(Ptr, f32);
     obs_source_set_audio_mixers: fn(Ptr, u32);
     obs_scene_create: fn(*const c_char) -> Ptr;
     obs_scene_release: fn(Ptr);
@@ -198,6 +199,8 @@ static EVENTS: OnceLock<Box<dyn Fn(Event) + Send + Sync>> = OnceLock::new();
 static CURRENT_OUTPUT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static MIC_SOURCE: Mutex<usize> = Mutex::new(0);
 static MIC_MUTED: AtomicBool = AtomicBool::new(true);
+/// Microphone gain in percent; 100 leaves the signal unchanged.
+static MIC_VOLUME: AtomicU32 = AtomicU32::new(100);
 static SAVE_PENDING: AtomicBool = AtomicBool::new(false);
 /// Memory saves finish only when a later packet arrives; a dead encoder must not block them forever.
 const MEMORY_SAVE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -437,6 +440,19 @@ pub fn set_mic_muted(muted: bool) -> bool {
     }
 }
 
+/// Set the microphone loudness in percent; false if the engine is not running yet.
+pub fn set_mic_volume(percent: u32) -> bool {
+    MIC_VOLUME.store(percent, Ordering::SeqCst);
+    let mic = MIC_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
+    match API.get() {
+        Some(api) if *mic != 0 => {
+            unsafe { (api.obs_source_set_volume)(*mic as Ptr, percent as f32 / 100.0) };
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Load libobs; the platform prepares the search paths.
 fn load_api() -> Result<(&'static Api, Layout), String> {
     let layout = sys::locate().ok_or_else(|| t(sys::NOT_INSTALLED))?;
@@ -645,6 +661,7 @@ impl Engine {
             unsafe {
                 (api.obs_source_set_audio_mixers)(self.mic, 1);
                 (api.obs_source_set_muted)(self.mic, MIC_MUTED.load(Ordering::SeqCst));
+                (api.obs_source_set_volume)(self.mic, MIC_VOLUME.load(Ordering::SeqCst) as f32 / 100.0);
                 (api.obs_set_output_source)(CHANNEL_MIC, self.mic);
             }
             *mic = self.mic as usize;

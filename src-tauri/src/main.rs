@@ -169,6 +169,7 @@ fn apply_mic_settings(s: &Settings) {
     PTT_VK.store(s.mic_ptt_vk, Ordering::SeqCst);
     MIC_MODE.store(mode, Ordering::SeqCst);
     engine::set_mic_muted(mode != MIC_ALWAYS);
+    engine::set_mic_volume(s.mic_volume);
 }
 
 /// Check identity before allowing OBS to open a microphone. A missing input never follows defaults.
