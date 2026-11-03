@@ -612,7 +612,10 @@ fn request_save(app: &AppHandle) -> Result<(), String> {
         return Err(t("update.busy"));
     }
     if st.save_in_progress.swap(true, Ordering::SeqCst) {
-        return Err(t("engine.saveBusy"));
+        let busy = t("engine.saveBusy");
+        logfile::write(&format!("Save failed: {busy}"));
+        show_toast(app, "error", &t("toast.saveFailed"), &busy);
+        return Err(busy);
     }
     let status = st.status.lock().unwrap().clone();
     let result = if !status.obs_installed {

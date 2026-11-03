@@ -12,6 +12,7 @@ static RECORD_STARTS: AtomicUsize = AtomicUsize::new(0);
 static FAIL_START: AtomicBool = AtomicBool::new(false);
 static FAIL_AUDIO: AtomicBool = AtomicBool::new(false);
 static RECORDED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static SAVE_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
 fn config() -> Config {
     Config {
@@ -119,12 +120,17 @@ fn engine() -> Engine {
     FAIL_START.store(false, Ordering::SeqCst);
     FAIL_AUDIO.store(false, Ordering::SeqCst);
     RECORDED.lock().unwrap().clear();
-    set_event_handler(|event| {
-        if let Event::Recorded(path) = event {
-            RECORDED.lock().unwrap().push(path);
+    SAVE_FAILURES.store(0, Ordering::SeqCst);
+    set_event_handler(|event| match event {
+        Event::Recorded(path) => RECORDED.lock().unwrap().push(path),
+        Event::SaveFailed(_) => {
+            SAVE_FAILURES.fetch_add(1, Ordering::SeqCst);
         }
+        _ => (),
     });
     SAVE_PENDING.store(false, Ordering::SeqCst);
+    MEMORY_SAVE.store(0, Ordering::SeqCst);
+    ENCODER_FAILED.store(false, Ordering::SeqCst);
     REPLAY_WANTED.store(false, Ordering::SeqCst);
     RECORDING_WANTED.store(false, Ordering::SeqCst);
     MONITOR_MODE.store(false, Ordering::SeqCst);
@@ -754,6 +760,80 @@ fn afk_preserves_replay_preferences_without_capturing_during_settings_changes() 
             assert!(!e.recording_active());
         }
     }
+}
+
+fn saving_engine() -> Engine {
+    unsafe extern "C" fn proc_call(_: Ptr, _: *const c_char, _: *mut Calldata) -> bool {
+        true
+    }
+    let mut e = afk_engine();
+    let mut api = fake_api();
+    api.obs_enum_input_types = e.api.obs_enum_input_types;
+    api.obs_source_create = e.api.obs_source_create;
+    api.obs_audio_encoder_create = e.api.obs_audio_encoder_create;
+    api.obs_output_create = e.api.obs_output_create;
+    api.proc_handler_call = proc_call;
+    e.api = Box::leak(Box::new(api));
+    e.replay_enabled = true;
+    REPLAY_ACTIVE.store(true, Ordering::SeqCst);
+    e
+}
+
+#[test]
+fn encoder_failure_ends_pending_memory_save_and_rebuilds_a_stuck_output() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let mut e = saving_engine();
+    e.save().unwrap();
+    assert!(e.saving());
+
+    // libobs reports the failure, but the output still claims to be active.
+    handle_replay_stop(OUTPUT_ENCODE_ERROR);
+    assert!(!e.saving());
+    assert_eq!(SAVE_FAILURES.load(Ordering::SeqCst), 1);
+    assert!(REPLAY_ACTIVE.load(Ordering::SeqCst));
+    assert!(!e.replay_active());
+    assert!(e.save().is_err());
+
+    e.restart().unwrap();
+    assert!(e.replay_active());
+    assert!(!ENCODER_FAILED.load(Ordering::SeqCst));
+    assert!(RELEASED.load(Ordering::SeqCst) >= 2, "old encoders must be released");
+    assert_eq!(e.encoder_name(), "obs_x264");
+}
+
+#[test]
+fn memory_save_timeout_applies_only_to_the_save_that_is_still_waiting() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let mut e = saving_engine();
+    e.save().unwrap();
+    let first = MEMORY_SAVE.load(Ordering::SeqCst);
+
+    abandon_memory_save(first);
+    assert!(!e.saving());
+    assert_eq!(SAVE_FAILURES.load(Ordering::SeqCst), 1);
+
+    e.save().unwrap();
+    abandon_memory_save(first);
+    assert!(e.saving(), "an old timeout must not end a newer save");
+    assert_eq!(SAVE_FAILURES.load(Ordering::SeqCst), 1);
+
+    handle_replay_stop(0);
+    assert!(e.saving(), "a normal stop does not fail the save");
+    assert!(!ENCODER_FAILED.load(Ordering::SeqCst));
+    abandon_memory_save(MEMORY_SAVE.load(Ordering::SeqCst));
+    assert!(!e.saving());
+}
+
+#[test]
+fn enabling_replay_after_an_encoder_failure_rebuilds_the_pipeline() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let mut e = saving_engine();
+    e.replay_enabled = false;
+    handle_replay_stop(OUTPUT_ENCODE_ERROR);
+    e.set_replay_enabled(true).unwrap();
+    assert!(e.replay_active());
+    assert!(e.replay_enabled());
+    assert!(!ENCODER_FAILED.load(Ordering::SeqCst));
 }
 
 #[test]

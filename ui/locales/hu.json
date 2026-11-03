@@ -252,6 +252,7 @@
   "engine.recordingFinalize": "A felvétel lezárása nem sikerült. A részleges fájl megmaradt: {path}",
   "engine.bufferQuota": "A lemezes puffer elérte a méretkorlátot. Ellenőrizd a tárhelyet és a mappa jogosultságait.",
   "engine.saveCancelled": "A klipmentés megszakadt.",
+  "engine.saveStalled": "A rögzítés nem reagált, ezért a klip nem menthető.",
   "settings.memoryBudget": "Biztonságos RAM-keret: {size} MiB; elérhető pufferidő: {duration}.",
   "status.encoder": "Kódoló: {name}",
   "status.cpuEncoder": "CPU-s kódolás; játék közben nagyobb terhelés.",

@@ -252,6 +252,7 @@
   "engine.recordingFinalize": "Could not finalize the recording. The partial file was preserved: {path}",
   "engine.bufferQuota": "The disk buffer reached its size limit. Check disk space and folder permissions.",
   "engine.saveCancelled": "Clip saving was canceled.",
+  "engine.saveStalled": "The capture stopped responding, so the clip could not be saved.",
   "settings.memoryBudget": "Safe RAM budget: {size} MiB; available replay length: {duration}.",
   "status.encoder": "Encoder: {name}",
   "status.cpuEncoder": "CPU encoding; higher load while gaming.",

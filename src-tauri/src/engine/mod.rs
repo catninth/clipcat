@@ -17,7 +17,7 @@ mod disk;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -199,6 +199,13 @@ static CURRENT_OUTPUT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static MIC_SOURCE: Mutex<usize> = Mutex::new(0);
 static MIC_MUTED: AtomicBool = AtomicBool::new(true);
 static SAVE_PENDING: AtomicBool = AtomicBool::new(false);
+/// Memory saves finish only when a later packet arrives; a dead encoder must not block them forever.
+const MEMORY_SAVE_TIMEOUT: Duration = Duration::from_secs(60);
+static MEMORY_SAVE: AtomicU64 = AtomicU64::new(0);
+static NEXT_MEMORY_SAVE: AtomicU64 = AtomicU64::new(1);
+/// `OBS_OUTPUT_ENCODE_ERROR`: libobs can leave the output active, so its encoders must be rebuilt.
+const OUTPUT_ENCODE_ERROR: i64 = -8;
+static ENCODER_FAILED: AtomicBool = AtomicBool::new(false);
 static RECORD_STOP_CODE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 // Hidden sources do no work (monitor capture releases duplication, game capture
@@ -318,8 +325,16 @@ unsafe extern "C" fn log_handler(level: c_int, format: *const c_char, args: Ptr,
 unsafe extern "C" fn on_saved(_data: Ptr, _cd: *mut Calldata) {
     let output = CURRENT_OUTPUT.load(Ordering::SeqCst);
     let path = API.get().and_then(|api| last_replay(api, output));
+    MEMORY_SAVE.store(0, Ordering::SeqCst);
     SAVE_PENDING.store(false, Ordering::SeqCst);
     emit(Event::Saved(path));
+}
+
+fn abandon_memory_save(id: u64) {
+    if id != 0 && MEMORY_SAVE.compare_exchange(id, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        SAVE_PENDING.store(false, Ordering::SeqCst);
+        emit(Event::SaveFailed(t("engine.saveStalled")));
+    }
 }
 
 /// Disk buffer: the muxer started a new segment.
@@ -339,7 +354,17 @@ unsafe fn stop_code(api: &Api, cd: *mut Calldata) -> i64 {
 
 unsafe extern "C" fn on_stop(_data: Ptr, cd: *mut Calldata) {
     let Some(api) = API.get() else { return };
-    emit(Event::Stopped(stop_code(api, cd)));
+    handle_replay_stop(stop_code(api, cd));
+}
+
+fn handle_replay_stop(code: i64) {
+    if code == OUTPUT_ENCODE_ERROR {
+        ENCODER_FAILED.store(true, Ordering::SeqCst);
+    }
+    if code != 0 {
+        abandon_memory_save(MEMORY_SAVE.load(Ordering::SeqCst));
+    }
+    emit(Event::Stopped(code));
 }
 
 /// stop_recording reports normal manual-recording stops; only errors matter here.
@@ -988,8 +1013,16 @@ impl Engine {
             Ok(())
         } else {
             set_replay_wanted(true);
-            let result = self.sync_audio().and_then(|_| self.start_replay());
+            let previous = self.replay_enabled;
+            let result = if ENCODER_FAILED.load(Ordering::SeqCst) {
+                // The rebuilt pipeline only starts replay when it is enabled.
+                self.replay_enabled = true;
+                self.restart()
+            } else {
+                self.sync_audio().and_then(|_| self.start_replay())
+            };
             if result.is_err() {
+                self.replay_enabled = previous;
                 set_replay_wanted(false);
                 let _ = self.sync_audio();
             } else {
@@ -1158,13 +1191,18 @@ impl Engine {
         let api = self.api;
         unsafe {
             if !self.output.is_null() {
-                stop_output(api, self.output, Duration::from_secs(5));
+                let stopped = stop_output(api, self.output, Duration::from_secs(5));
                 if self.config.buffer_dir.is_some() {
                     disk::end();
                 }
                 self.buffer_since = 0;
                 CURRENT_OUTPUT.store(null_mut(), Ordering::SeqCst);
-                (api.obs_output_release)(self.output);
+                // Releasing waits for the stop to finish, which would freeze a stuck output's caller.
+                if stopped {
+                    (api.obs_output_release)(self.output);
+                } else {
+                    logfile::write("Replay output did not stop; leaving it unreleased");
+                }
                 self.output = null_mut();
             }
             for encoder in [&mut self.video_encoder, &mut self.audio_encoder] {
@@ -1174,6 +1212,7 @@ impl Engine {
                 }
             }
         }
+        ENCODER_FAILED.store(false, Ordering::SeqCst);
     }
 
     /// Apply new settings: rebuild the buffer and reinitialize video if needed.
@@ -1315,9 +1354,18 @@ impl Engine {
         if self.saving() {
             return Err(t("engine.saveBusy"));
         }
-        self.stop_replay();
+        // An encoder error also ended any manual recording; a failed rebuild leaves no output to reuse.
+        let rebuild = ENCODER_FAILED.load(Ordering::SeqCst) || self.output.is_null();
+        if rebuild {
+            logfile::write("Rebuilding the capture pipeline");
+            self.teardown_pipeline();
+        } else {
+            self.stop_replay();
+        }
         set_replay_wanted(true);
-        let result = self.sync_audio().and_then(|_| self.start_replay());
+        let result = self
+            .sync_audio()
+            .and_then(|_| if rebuild { self.build_pipeline() } else { self.start_replay() });
         if result.is_err() {
             set_replay_wanted(false);
             let _ = self.sync_audio();
@@ -1358,7 +1406,7 @@ impl Engine {
     }
 
     pub fn replay_active(&self) -> bool {
-        !self.output.is_null() && unsafe { (self.api.obs_output_active)(self.output) }
+        !self.output.is_null() && !ENCODER_FAILED.load(Ordering::SeqCst) && unsafe { (self.api.obs_output_active)(self.output) }
     }
 
     /// Saving finishes in the background; the result arrives as a `Saved` or `SaveFailed` event.
@@ -1384,6 +1432,10 @@ impl Engine {
             None
         };
         let proc_name = if known.is_some() { c"split_file" } else { c"save" };
+        let memory_save = known.is_none().then(|| NEXT_MEMORY_SAVE.fetch_add(1, Ordering::SeqCst));
+        if let Some(id) = memory_save {
+            MEMORY_SAVE.store(id, Ordering::SeqCst);
+        }
         let mut cd = Calldata::new();
         let ok = unsafe {
             let ph = (self.api.obs_output_get_proc_handler)(self.output);
@@ -1395,8 +1447,15 @@ impl Engine {
         };
         let Some(known) = known else {
             return if ok {
+                if let Some(id) = memory_save {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(MEMORY_SAVE_TIMEOUT);
+                        abandon_memory_save(id);
+                    });
+                }
                 Ok(())
             } else {
+                MEMORY_SAVE.store(0, Ordering::SeqCst);
                 SAVE_PENDING.store(false, Ordering::SeqCst);
                 Err(t("engine.saveStart"))
             };
