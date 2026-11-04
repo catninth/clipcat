@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.10.0 – 2026-11-04
+
+Changes since v0.9.0.
+
+### Added
+
+- Add a microphone volume control from 0% to 200%, with a default of 100%. Apply volume changes to recordings without rebuilding the replay buffer.
+- Add a microphone test with playback at the selected volume and a live level meter, with Hungarian and English labels.
+
+### Fixed
+
+- Recover replay saving and capture after encoder failures, and time out stalled in-memory replay saves.
+- Release the microphone test's temporary stream when device enumeration fails, including failures received after closing Settings.
+
+### Compatibility
+
+- Existing settings retain 100% microphone volume.
+- The microphone test previews audio through the WebView rather than the OBS recording chain. Use headphones to avoid feedback.
+
+### Tests
+
+- Add regression coverage for device enumeration failures, cleanup after unmount, unavailable devices, and selected or default microphone playback cleanup.
+
 ## 0.9.0 – 2026-11-02
 
 Changes since v0.8.1.
