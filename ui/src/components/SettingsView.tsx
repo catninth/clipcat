@@ -250,11 +250,11 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
     setDraft((d) => ({ ...d!, micPttVk: vk, micPttLabel: label }));
   };
 
-  const hotkeyRows: [HotkeyField, string, string?][] = [
+  const hotkeyRows: [HotkeyField, string][] = [
     ["hotkeySave", "settings.hotkeySave.label"],
-    ["hotkeyRecord", "settings.hotkeyRecord.label", "settings.hotkeyRecord.hint"],
-    ["hotkeyReplay", "settings.hotkeyReplay.label", "settings.hotkeyReplay.hint"],
-    ["hotkeyOpenFolder", "settings.hotkeyOpenFolder.label", "settings.hotkeyOpenFolder.hint"],
+    ["hotkeyRecord", "settings.hotkeyRecord.label"],
+    ["hotkeyReplay", "settings.hotkeyReplay.label"],
+    ["hotkeyOpenFolder", "settings.hotkeyOpenFolder.label"],
     ["hotkeyGallery", "settings.hotkeyGallery.label"],
   ];
 
@@ -269,12 +269,11 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
     <SettingsFrame>
       <form className="mx-auto flex w-full max-w-[800px] flex-col gap-7" autoComplete="off" onSubmit={submit}>
         <Card title={t("settings.capture.title")}>
-          <Row label={t("settings.outputDir.label")} hints={[t("settings.outputDir.hint")]}>
+          <Row label={t("settings.outputDir.label")}>
             <TextInput wide readOnly aria-label={t("settings.outputDir.label")} value={draft.outputDir} />
             <Button onClick={() => pickFolder("outputDir")}>{t("settings.browse")}</Button>
           </Row>
           <Row label={t("settings.buffer.label")} hints={[
-            t("settings.buffer.hint"),
             !bufferValid && { text: t("validate.buffer", { min: MIN_BUFFER_SECONDS, max: MAX_BUFFER_SECONDS }), tone: "error" },
           ]}>
             <Range aria-label={t("settings.buffer.label")} min={MIN_BUFFER_SECONDS} max={MAX_BUFFER_SECONDS} step={1}
@@ -442,15 +441,15 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
         </Card>
 
         <Card title={t("settings.hotkeys.title")}>
-          {hotkeyRows.map(([field, label, hint]) => (
-            <Row key={field} label={t(label)} hints={[hint && t(hint)]}>
+          {hotkeyRows.map(([field, label]) => (
+            <Row key={field} label={t(label)}>
               <CaptureButton label={prettyHotkey(draft[field])} onCapture={hotkeyCapture(field)} />
             </Row>
           ))}
         </Card>
 
         <Card title={t("settings.system.title")}>
-          <Row label={t("settings.language.label")} hints={[t("settings.language.hint")]}>
+          <Row label={t("settings.language.label")}>
             <Select aria-label={t("settings.language.label")} value={draft.language}
               onValueChange={(value) => set("language", value as Settings["language"])}
               options={[{ value: "hu", label: "Magyar" }, { value: "en-US", label: "English US" }]} />
