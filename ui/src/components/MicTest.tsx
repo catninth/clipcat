@@ -15,10 +15,14 @@ async function openMicrophone(deviceName: string | null) {
   });
   const first = await navigator.mediaDevices.getUserMedia(constraints());
   if (!deviceName) return first;
-  // Labels are only readable after the first permission grant
-  const device = (await navigator.mediaDevices.enumerateDevices())
-    .find((d) => d.kind === "audioinput" && !VIRTUAL_IDS.includes(d.deviceId) && d.label.includes(deviceName));
-  first.getTracks().forEach((track) => track.stop());
+  let device: MediaDeviceInfo | undefined;
+  try {
+    // Labels are only readable after the first permission grant
+    device = (await navigator.mediaDevices.enumerateDevices())
+      .find((d) => d.kind === "audioinput" && !VIRTUAL_IDS.includes(d.deviceId) && d.label.includes(deviceName));
+  } finally {
+    first.getTracks().forEach((track) => track.stop());
+  }
   if (!device) throw new DOMException(deviceName, "NotFoundError");
   return navigator.mediaDevices.getUserMedia(constraints(device.deviceId));
 }
