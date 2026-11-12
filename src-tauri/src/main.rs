@@ -81,6 +81,7 @@ enum Action {
 
 struct AppState {
     settings: Mutex<Settings>,
+    playback: media::Playback,
     operations: Mutex<()>,
     installing: AtomicBool,
     save_in_progress: AtomicBool,
@@ -1084,6 +1085,22 @@ fn clip_in_output_dir(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
     clips::checked_path(Path::new(&current_settings(app).output_dir), Path::new(path))
 }
 
+#[tauri::command]
+fn start_playback(app: AppHandle, path: String) -> Result<String, String> {
+    state(&app).playback.start(Path::new(&current_settings(&app).output_dir), Path::new(&path))
+}
+
+#[tauri::command]
+fn resolve_playback(app: AppHandle, token: String, path: Option<String>) -> Result<String, String> {
+    let path = state(&app).playback.resolve(Path::new(&current_settings(&app).output_dir), &token, path.as_deref().map(Path::new))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn stop_playback(app: AppHandle, token: String) {
+    state(&app).playback.stop(&token);
+}
+
 /// Active language code and messages for the UI
 #[tauri::command]
 fn get_locale() -> serde_json::Value {
@@ -1291,9 +1308,32 @@ fn reveal_clip(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn rename_clip(app: AppHandle, path: String, new_stem: String) -> Result<Clip, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let st = state(&app);
+        let _operation = st.operations.lock().unwrap();
+        let recording = st.engine.lock().unwrap().as_ref().and_then(|e| e.recording_path().map(PathBuf::from));
+        let settings = current_settings(&app);
+        let path = Path::new(&path);
+        let was_last = settings.last_clip.as_deref().map(Path::new) == Some(path);
+        let clip = clips::rename(Path::new(&settings.output_dir), path, &new_stem, recording.as_deref())?;
+        if was_last {
+            let mut settings = st.settings.lock().unwrap();
+            settings.last_clip = Some(clip.path.clone());
+            if let Err(error) = settings::save(&settings) {
+                logfile::write(&format!("Could not save the renamed last clip path: {error}"));
+            }
+        }
+        Ok(clip)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn delete_clip(app: AppHandle, path: String) -> Result<(), String> {
-    let clip = clip_in_output_dir(&app, &path)?;
-    if !platform::recycle(&clip.to_string_lossy()) {
+    let entry = clips::checked_entry(Path::new(&current_settings(&app).output_dir), Path::new(&path))?;
+    if !platform::recycle(&entry.path.to_string_lossy()) {
         return Err(t("error.clipDelete"));
     }
     let st = state(&app);
@@ -1459,17 +1499,20 @@ fn main() {
             let allowed = context.webview_label() == "main";
             std::thread::spawn(move || {
                 let root = PathBuf::from(current_settings(&app).output_dir);
-                responder.respond(media::response(&root, request, allowed));
+                responder.respond(media::response(&state(&app).playback, &root, request, allowed));
             });
         })
         // Suppress the webview's default context menu (Back, Reload, Inspect…) everywhere
         .on_page_load(|webview, payload| {
-            if payload.event() == PageLoadEvent::Finished {
+            if payload.event() == PageLoadEvent::Started && webview.label() == "main" {
+                state(webview.app_handle()).playback.clear();
+            } else if payload.event() == PageLoadEvent::Finished {
                 let _ = webview.eval("document.addEventListener('contextmenu', e => e.preventDefault());");
             }
         })
         .manage(AppState {
             settings: Mutex::new(settings.clone()),
+            playback: media::Playback::default(),
             operations: Mutex::new(()),
             installing: AtomicBool::new(false),
             save_in_progress: AtomicBool::new(false),
@@ -1577,6 +1620,9 @@ fn main() {
             get_settings,
             get_status,
             list_clips,
+            start_playback,
+            resolve_playback,
+            stop_playback,
             save_settings,
             save_replay,
             toggle_record,
@@ -1587,6 +1633,7 @@ fn main() {
             buffer_budget,
             open_clip,
             reveal_clip,
+            rename_clip,
             delete_clip,
             open_output_folder,
             pick_folder,

@@ -68,6 +68,7 @@ export interface Clip {
   name: string;
   game: string;
   size: number;
+  created: number;
   modified: number;
 }
 

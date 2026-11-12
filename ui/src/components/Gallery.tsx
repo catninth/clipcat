@@ -1,36 +1,40 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { cx, formatDate, formatDuration, formatSize, gameOf, prettyHotkey } from "../lib/format";
-import { i18n, t, useLocale } from "../lib/i18n";
+import { cx, formatDate, formatDuration, formatSize, prettyHotkey } from "../lib/format";
+import type { SortField, useGalleryOrder } from "../lib/galleryOrder";
+import { t, useLocale } from "../lib/i18n";
 import { convertFileSrc } from "../lib/tauri";
 import type { Clip } from "../lib/tauri";
 import { getThumb, previewTime, requestThumb, tileKey } from "../lib/thumbs";
 import { Button } from "./ui";
 
 const HOVER_DELAY_MS = 200;
+const PAGE_SIZE = 60;
+const SORT_FIELDS: Record<SortField, string> = {
+  name: "gallery.sortName", duration: "gallery.sortDuration", created: "gallery.sortCreated", size: "gallery.sortSize",
+};
 
 interface Props {
-  clips: Clip[];
-  filter: string;
+  order: ReturnType<typeof useGalleryOrder>;
+  playingIndex: number;
   onFilter: (game: string) => void;
   hotkeySave: string | undefined;
   onRefresh: () => void;
   onOpen: (clip: Clip) => void;
 }
 
-export function Gallery({ clips, filter, onFilter, hotkeySave, onRefresh, onOpen }: Props) {
+export function Gallery({ order, playingIndex, onFilter, hotkeySave, onRefresh, onOpen }: Props) {
+  const { activeFilter, games, visible, sort, selectSort, loadingDurations } = order;
   const [page, setPage] = useState(0);
-  const pageSize = 60;
   // Keep at most one playing preview active, starting after a short delay
   const [hovered, setHovered] = useState<string | null>(null);
   const hoverTimer = useRef(0);
 
-  const games = [...new Set(clips.map(gameOf))].sort((a, b) => a.localeCompare(b, i18n.lang));
-  // Reset to all games if the last clip for the filtered game has disappeared
-  const activeFilter = games.includes(filter) ? filter : "";
-  const visible = clips.filter((c) => !activeFilter || gameOf(c) === activeFilter);
-  const pages = Math.max(1, Math.ceil(visible.length / pageSize));
+  const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const currentPage = Math.min(page, pages - 1);
-  const shown = visible.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const shown = visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+  useEffect(() => {
+    if (playingIndex >= 0) setPage(Math.floor(playingIndex / PAGE_SIZE));
+  }, [playingIndex]);
 
   const hover = useCallback((key: string | null) => {
     clearTimeout(hoverTimer.current);
@@ -54,7 +58,7 @@ export function Gallery({ clips, filter, onFilter, hotkeySave, onRefresh, onOpen
         <Button className="self-center" onClick={onRefresh}>{t("gallery.refresh")}</Button>
       </div>
 
-      <div className="flex flex-wrap gap-1.5 px-8 pb-4">
+      <div className="flex flex-wrap gap-1.5 px-8 pb-3">
         {["", ...games].map((game) => (
           <button
             key={game}
@@ -69,6 +73,26 @@ export function Gallery({ clips, filter, onFilter, hotkeySave, onRefresh, onOpen
             {game || t("gallery.all")}
           </button>
         ))}
+      </div>
+
+      <div role="group" aria-label={t("gallery.sortBy")} className="flex flex-wrap items-center gap-1 px-8 pb-3">
+        <span aria-hidden="true" className="mr-1.5 text-xs font-medium text-muted">{t("gallery.sortBy")}</span>
+        {(Object.keys(SORT_FIELDS) as SortField[]).map(field => {
+          const active = field === sort.field;
+          return <button
+            key={field}
+            type="button"
+            aria-pressed={active}
+            className={cx("inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-xs font-medium transition-colors",
+              active ? "bg-panel-2 text-fg" : "text-muted hover:bg-panel hover:text-fg")}
+            onClick={() => { setPage(0); selectSort(field); hover(null); }}
+          >
+            {t(SORT_FIELDS[field])}
+            {active && <><span aria-hidden="true">{sort.ascending ? "↑" : "↓"}</span>
+              <span className="sr-only">{t(sort.ascending ? "gallery.ascending" : "gallery.descending")}</span></>}
+          </button>;
+        })}
+        {loadingDurations && <span role="status" className="ml-2 text-xs text-muted">{t("gallery.loadingDurations")}</span>}
       </div>
 
       <div className="scroll-area flex-1 px-8 pt-1 pb-8">
@@ -148,8 +172,8 @@ const Tile = memo(function Tile({ tileKey: key, clip, previewing, onHover, onOpe
         )}
       </div>
       <div className="px-0.5 pt-2.5">
-        <div className="truncate font-semibold tracking-[-.005em]">{clip.game || clip.name}</div>
-        <div className="text-[12.5px] text-muted tabular">{`${formatDate(clip.modified)} · ${formatSize(clip.size)}`}</div>
+        <div className="truncate font-semibold tracking-[-.005em]">{clip.name}</div>
+        <div className="truncate text-[12.5px] text-muted tabular">{[clip.game, formatDate(clip.created), formatSize(clip.size)].filter(Boolean).join(" · ")}</div>
       </div>
     </div>
   );

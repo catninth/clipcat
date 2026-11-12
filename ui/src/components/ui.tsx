@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, ComponentProps, CSSProperties, InputHTMLAttributes, ReactNode } from "react";
 import { cx } from "../lib/format";
 
 export { Select } from "./Select";
@@ -13,7 +13,7 @@ const BUTTON_VARIANTS = {
   recording: "bg-danger text-white font-semibold tabular enabled:hover:bg-danger-hover",
 };
 
-interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface ButtonProps extends ComponentProps<"button"> {
   variant?: keyof typeof BUTTON_VARIANTS;
   /** Full width, with content aligned to both edges (sidebar) */
   wide?: boolean;

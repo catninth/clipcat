@@ -67,6 +67,10 @@ async function storedThumb(key: string): Promise<Stored | undefined> {
   } catch { return undefined; }
 }
 
+export async function cachedDuration(key: string): Promise<number | undefined> {
+  return (cache.get(key) ?? await storedThumb(key))?.duration;
+}
+
 function evict(key: string) {
   cache.delete(key);
   const url = urls.get(key);

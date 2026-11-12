@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Rename the playing clip in ClipCat or Windows Explorer without interrupting playback or seeking.
+- Step through the filtered gallery with the player's previous and next buttons, including across gallery pages.
+- Sort clips by filename, length, creation time, or file size. Click the same field again to reverse the order.
+
 ## 0.10.0 – 2026-11-04
 
 Changes since v0.9.0.

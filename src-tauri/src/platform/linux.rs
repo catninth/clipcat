@@ -134,6 +134,20 @@ pub fn open_path(path: &str) {
     let _ = Command::new("xdg-open").arg(path).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
 
+pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let from = CString::new(from.as_os_str().as_bytes())?;
+    let to = CString::new(to.as_os_str().as_bytes())?;
+    let result = unsafe {
+        libc::syscall(libc::SYS_renameat2, libc::AT_FDCWD, from.as_ptr(), libc::AT_FDCWD, to.as_ptr(), libc::RENAME_NOREPLACE)
+    };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Move to trash (recoverable deletion) through GLib
 pub fn recycle(path: &str) -> bool {
     Command::new("gio")

@@ -93,9 +93,11 @@ Screenshots show the English UI with sample clips and simulated capture state. S
 - **Choose where the buffer lives.** Use RAM for a memory buffer or disk for rolling
   segment files. Disk mode writes continuously and takes time to assemble a saved clip.
   [Buffer settings](docs/gallery/settings/disk-buffer.png).
-- **Find and replay local clips.** Browse application groups and thumbnails, play a
-  video, or reveal it in your file manager. [Gallery](docs/gallery/gallery/overview.png)
-  and [player](docs/gallery/player/playback.png).
+- **Find and replay local clips.** Filter the [gallery](docs/gallery/gallery/overview.png) by
+  application and sort by filename, length, creation time, or size. Click the active sort
+  field again to reverse the order. The [player](docs/gallery/player/playback.png) arrows
+  follow that order across pages. Use **Rename** to change the filename without restarting
+  playback. You can also rename the playing file in Windows Explorer and keep watching.
 
 ## FAQ
 

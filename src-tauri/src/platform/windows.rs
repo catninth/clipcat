@@ -8,7 +8,7 @@ use std::ffi::OsStr;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::WebviewWindow;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
@@ -515,6 +515,17 @@ fn recycle_source(path: &str) -> Vec<u16> {
     let mut from: Vec<u16> = OsStr::new(&path).encode_wide().collect();
     from.extend([0, 0]);
     from
+}
+
+pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+    let from: Vec<_> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<_> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    // Omitting MOVEFILE_REPLACE_EXISTING also allows a case-only rename on NTFS.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Move to the recycle bin (recoverable deletion).

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resolve-playback"
+description = "Enables the resolve_playback command without any pre-configured scope."
+commands.allow = ["resolve_playback"]
+
+[[permission]]
+identifier = "deny-resolve-playback"
+description = "Denies the resolve_playback command without any pre-configured scope."
+commands.deny = ["resolve_playback"]

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Gallery } from "./components/Gallery";
 import { Player } from "./components/Player";
 import { SettingsView } from "./components/SettingsView";
@@ -8,6 +8,9 @@ import { invoke, listen } from "./lib/tauri";
 import type { Clip, Settings, Status, UpdateState, View } from "./lib/tauri";
 import { pruneThumbs, thumbsReady, tileKey } from "./lib/thumbs";
 import { loadLocale, useLocale } from "./lib/i18n";
+import { useGalleryOrder } from "./lib/galleryOrder";
+
+const EMPTY_LIBRARY: Clip[] = [];
 
 export function App() {
   useLocale();
@@ -15,20 +18,25 @@ export function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [update, setUpdate] = useState<UpdateState | null>(null);
-  const [clips, setClips] = useState<Clip[]>([]);
+  const [clips, setClips] = useState<Clip[] | null>(null);
   const [gameFilter, setGameFilter] = useState("");
   const [playing, setPlaying] = useState<Clip | null>(null);
+  const [playbackKey, setPlaybackKey] = useState(0);
+  const refreshId = useRef(0);
+  const order = useGalleryOrder(clips ?? EMPTY_LIBRARY, gameFilter, !!playing);
+  const { keepRenamedDuration } = order;
+  const playingIndex = playing ? order.visible.findIndex(c => c.path === playing.path) : -1;
 
   // Also delete stored thumbnails for clips that no longer exist
-  const showClips = useCallback((list: Clip[]) => {
-    setClips(list);
-    pruneThumbs(new Set(list.map(tileKey)));
-  }, []);
+  useEffect(() => {
+    if (clips) pruneThumbs(new Set(clips.map(tileKey)));
+  }, [clips]);
 
   const loadClips = useCallback(async () => {
+    const id = ++refreshId.current;
     const [list] = await Promise.all([invoke<Clip[]>("list_clips"), thumbsReady]);
-    showClips(list);
-  }, [showClips]);
+    if (id === refreshId.current) setClips(list);
+  }, []);
 
   useEffect(() => {
     invoke<UpdateState>("get_update_state").then(setUpdate);
@@ -75,33 +83,47 @@ export function App() {
   }, [view, loadClips]);
 
   const closePlayer = useCallback(() => setPlaying(null), []);
+  const openClip = useCallback((clip: Clip) => {
+    setPlaying(clip);
+    setPlaybackKey(key => key + 1);
+  }, []);
+
+  const renamed = useCallback((previous: Clip, updated: Clip) => {
+    keepRenamedDuration(previous, updated);
+    setPlaying(current => current?.path === previous.path ? updated : current);
+    setClips(list => {
+      if (!list?.some(c => c.path === previous.path)) return list;
+      return list.filter(c => c.path === previous.path || c.path !== updated.path)
+        .map(c => c.path === previous.path ? updated : c);
+    });
+    void loadClips();
+  }, [keepRenamedDuration, loadClips]);
 
   const deleteClip = useCallback(async (clip: Clip) => {
     try {
       await invoke("delete_clip", { path: clip.path });
-      setClips((list) => {
-        const next = list.filter((c) => c.path !== clip.path);
-        pruneThumbs(new Set(next.map(tileKey)));
-        return next;
-      });
+      setClips(list => list?.filter(c => c.path !== clip.path) ?? null);
+      void loadClips();
     } catch (e) {
       alert(e);
     }
-  }, []);
+  }, [loadClips]);
 
   return (
     <>
-      <div className="grid h-full grid-cols-[236px_1fr]">
+      <div inert={!!playing} className="grid h-full grid-cols-[236px_1fr]">
         <Sidebar view={view} onView={setView} settings={settings} status={status} onStatus={setStatus} update={update} />
         <main className="flex flex-col overflow-hidden">
           {view === "gallery" ? (
-            <Gallery clips={clips} filter={gameFilter} onFilter={setGameFilter} hotkeySave={settings?.hotkeySave} onRefresh={loadClips} onOpen={setPlaying} />
+            <Gallery order={order} playingIndex={playingIndex} onFilter={setGameFilter} hotkeySave={settings?.hotkeySave} onRefresh={loadClips} onOpen={openClip} />
           ) : (
             settings && <SettingsView settings={settings} onSaved={setSettings} onStatus={setStatus} update={update} />
           )}
         </main>
       </div>
-      <Player clip={playing} onClose={closePlayer} onDelete={deleteClip} />
+      <Player clip={playing} playbackKey={playbackKey} onClose={closePlayer} onDelete={deleteClip} onRenamed={renamed}
+        onPrevious={playingIndex > 0 ? () => openClip(order.visible[playingIndex - 1]) : undefined}
+        onNext={playingIndex >= 0 && playingIndex + 1 < order.visible.length ? () => openClip(order.visible[playingIndex + 1]) : undefined} />
       <MicrophoneWarning warning={status?.micWarning ?? null} onSettings={() => { setPlaying(null); setView("settings"); }} />
     </>
   );
