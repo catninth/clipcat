@@ -1,7 +1,6 @@
 import "fake-indexeddb/auto";
 import { expect, it, vi } from "vitest";
 import { waitFor } from "@testing-library/react";
-vi.mock("./tauri", () => ({ convertFileSrc: (path: string) => path }));
 
 it("loads persisted thumbnails only when visible and revokes removed clips (audit 18)", async () => {
   let intersect!: IntersectionObserverCallback;

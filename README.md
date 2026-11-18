@@ -98,6 +98,8 @@ Screenshots show the English UI with sample clips and simulated capture state. S
   field again to reverse the order. The [player](docs/gallery/player/playback.png) arrows
   follow that order across pages. Use **Rename** to change the filename without restarting
   playback. You can also rename the playing file in Windows Explorer and keep watching.
+- **Trim clips without losing quality.** Drag the left and right handles in the player,
+  then save a new clip or replace the original.
 
 ## FAQ
 

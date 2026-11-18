@@ -121,7 +121,7 @@ export function App() {
           )}
         </main>
       </div>
-      <Player clip={playing} playbackKey={playbackKey} onClose={closePlayer} onDelete={deleteClip} onRenamed={renamed}
+      <Player clip={playing} playbackKey={playbackKey} onClose={closePlayer} onDelete={deleteClip} onRenamed={renamed} onTrimmed={loadClips}
         onPrevious={playingIndex > 0 ? () => openClip(order.visible[playingIndex - 1]) : undefined}
         onNext={playingIndex >= 0 && playingIndex + 1 < order.visible.length ? () => openClip(order.visible[playingIndex + 1]) : undefined} />
       <MicrophoneWarning warning={status?.micWarning ?? null} onSettings={() => { setPlaying(null); setView("settings"); }} />

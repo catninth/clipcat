@@ -14,6 +14,7 @@ mod platform;
 mod process;
 mod resources;
 mod settings;
+mod trim;
 mod updater;
 
 use engine::Engine;
@@ -85,6 +86,7 @@ struct AppState {
     operations: Mutex<()>,
     installing: AtomicBool,
     save_in_progress: AtomicBool,
+    trim_in_progress: AtomicBool,
     hotkeys_suspended: AtomicBool,
     hotkey_generation: AtomicU64,
     selected_folders: Mutex<HashSet<PathBuf>>,
@@ -1345,6 +1347,40 @@ fn delete_clip(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Keep `start..end` seconds of a clip; returns the resulting file's path.
+#[tauri::command]
+async fn trim_clip(app: AppHandle, path: String, start: f64, end: f64, replace: bool) -> Result<String, String> {
+    let clip = clip_in_output_dir(&app, &path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let st = state(&app);
+        {
+            // Held only to check: an update must not begin between these checks and the flag.
+            let _operation = st.operations.lock().unwrap();
+            if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
+                return Err(t("update.busy"));
+            }
+            if st.trim_in_progress.swap(true, Ordering::SeqCst) {
+                return Err(t("error.trimBusy"));
+            }
+        }
+        let result = trim::trim(&clip, start, end, replace, &st.quitting);
+        st.trim_in_progress.store(false, Ordering::SeqCst);
+        // Keep the path form the UI uses, not the canonical one
+        let saved = Path::new(&path).with_file_name(result?.file_name().unwrap_or_default());
+        let saved = saved.to_string_lossy().into_owned();
+        if replace {
+            let mut s = st.settings.lock().unwrap();
+            if s.last_clip.as_deref() == Some(path.as_str()) {
+                s.last_clip = Some(saved.clone());
+                let _ = settings::save(&s);
+            }
+        }
+        Ok(saved)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn open_output_folder(app: AppHandle) {
     platform::open_path(&current_settings(&app).output_dir);
@@ -1516,6 +1552,7 @@ fn main() {
             operations: Mutex::new(()),
             installing: AtomicBool::new(false),
             save_in_progress: AtomicBool::new(false),
+            trim_in_progress: AtomicBool::new(false),
             hotkeys_suspended: AtomicBool::new(false),
             hotkey_generation: AtomicU64::new(0),
             selected_folders: Mutex::new(HashSet::new()),
@@ -1635,6 +1672,7 @@ fn main() {
             reveal_clip,
             rename_clip,
             delete_clip,
+            trim_clip,
             open_output_folder,
             pick_folder,
             is_ptt_key_supported,

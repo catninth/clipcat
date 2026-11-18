@@ -1,8 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { cx, formatDate, formatDuration, formatSize, prettyHotkey } from "../lib/format";
+import { clipSrc, cx, formatDate, formatDuration, formatSize, prettyHotkey } from "../lib/format";
 import type { SortField, useGalleryOrder } from "../lib/galleryOrder";
 import { t, useLocale } from "../lib/i18n";
-import { convertFileSrc } from "../lib/tauri";
 import type { Clip } from "../lib/tauri";
 import { getThumb, previewTime, requestThumb, tileKey } from "../lib/thumbs";
 import { Button } from "./ui";
@@ -133,10 +132,11 @@ const Tile = memo(function Tile({ tileKey: key, clip, previewing, onHover, onOpe
   useLocale();
   const ref = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState(() => getThumb(key));
+  const src = clipSrc(clip);
 
   useEffect(() => {
-    return requestThumb(key, clip.path, ref.current!, setThumb);
-  }, [key, clip.path]);
+    return requestThumb(key, src, ref.current!, setThumb);
+  }, [key, src]);
 
   return (
     <div
@@ -159,7 +159,7 @@ const Tile = memo(function Tile({ tileKey: key, clip, previewing, onHover, onOpe
         )}
       >
         {thumb && <img src={thumb.url} alt="" decoding="async" className="absolute inset-0 block size-full object-cover" />}
-        {previewing && <HoverPreview path={clip.path} />}
+        {previewing && <HoverPreview src={src} />}
         {thumb && isFinite(thumb.duration) && (
           <span
             className={cx(
@@ -180,19 +180,19 @@ const Tile = memo(function Tile({ tileKey: key, clip, previewing, onHover, onOpe
 });
 
 // Playing preview; release the decoder when removed
-function HoverPreview({ path }: { path: string }) {
+function HoverPreview({ src }: { src: string }) {
   const [playing, setPlaying] = useState(false);
   const attach = useCallback((video: HTMLVideoElement | null) => {
     if (!video) return;
     video.muted = true;
-    video.src = convertFileSrc(path);
+    video.src = src;
     video.play().catch(() => {});
     return () => {
       video.pause();
       video.removeAttribute("src");
       video.load();
     };
-  }, [path]);
+  }, [src]);
   return (
     <video
       ref={attach}

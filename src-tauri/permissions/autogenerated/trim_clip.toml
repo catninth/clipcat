@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-trim-clip"
+description = "Enables the trim_clip command without any pre-configured scope."
+commands.allow = ["trim_clip"]
+
+[[permission]]
+identifier = "deny-trim-clip"
+description = "Denies the trim_clip command without any pre-configured scope."
+commands.deny = ["trim_clip"]

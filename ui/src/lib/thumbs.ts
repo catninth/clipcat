@@ -1,7 +1,6 @@
 // Thumbnails are still images (JPEG), not live video: tiles do not keep a decoder open.
 // Render images from hidden videos, processing at most THUMB_WORKERS at once,
 // and only for tiles on or near the screen. Store the results in IndexedDB.
-import { convertFileSrc } from "./tauri";
 import type { Clip } from "./tauri";
 
 const THUMB_WORKERS = 2;
@@ -22,7 +21,7 @@ export interface Thumb {
 type Listener = (thumb: Thumb) => void;
 interface Job {
   key: string;
-  path: string;
+  src: string;
   el: Element;
 }
 
@@ -117,7 +116,7 @@ export function pruneThumbs(keep: Set<string>) {
 }
 
 // Extract a frame from a hidden video; release the video on every code path
-function capture(path: string): Promise<Stored> {
+function capture(src: string): Promise<Stored> {
   return new Promise((resolve, reject) => {
     const video = document.createElement("video");
     video.muted = true;
@@ -153,14 +152,14 @@ function capture(path: string): Promise<Stored> {
         video.addEventListener("loadeddata", draw, { once: true });
       }
     }, { once: true });
-    video.src = convertFileSrc(path);
+    video.src = src;
   });
 }
 
-async function generate({ key, path }: Job) {
+async function generate({ key, src }: Job) {
   inFlight.add(key);
   try {
-    const stored = await storedThumb(key) ?? await capture(path);
+    const stored = await storedThumb(key) ?? await capture(src);
     if (validKeys && !validKeys.has(key)) return;
     cache.set(key, stored);
     trimCache();
@@ -169,7 +168,7 @@ async function generate({ key, path }: Job) {
     store("readwrite", (s) => s.put(stored, key)).catch(() => {});
   } catch (e) {
     if (!validKeys || validKeys.has(key)) failed.add(key);
-    console.warn("thumbnail failed", path, e);
+    console.warn("thumbnail failed", src, e);
   } finally {
     inFlight.delete(key);
   }
@@ -206,14 +205,14 @@ const observer = new IntersectionObserver((entries) => {
 }, { rootMargin: "300px" });
 
 // Request a thumbnail when the tile approaches the screen; the returned function cancels the request
-export function requestThumb(key: string, path: string, el: Element, notify: Listener): () => void {
+export function requestThumb(key: string, src: string, el: Element, notify: Listener): () => void {
   if (failed.has(key)) return () => {};
   if (!listeners.has(key)) listeners.set(key, new Set());
   listeners.get(key)!.add(notify);
   const cached = getThumb(key);
   if (cached) notify(cached);
   else if (!inFlight.has(key)) {
-    jobs.set(el, { key, path, el });
+    jobs.set(el, { key, src, el });
     observer.observe(el);
   }
   return () => {

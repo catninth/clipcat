@@ -25,7 +25,11 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
     case "save_settings": settings = args?.settings as Settings; return "";
     case "get_status": return status;
     case "get_update_state": return { current: "0.4.1", phase: "latest", version: null, notes: null, progress: null, error: null };
-    case "list_clips": return [];
+    case "list_clips": return params.has("clip") ? [{ path: params.get("clip"), name: "Sample.mp4", game: "Game", size: 1024 ** 2, created: 1_700_000_000, modified: 1_700_000_000 }] : [];
+    // The preview serves the sample by path, so the path doubles as the playback token
+    case "start_playback": return args?.path;
+    case "resolve_playback": return args?.path;
+    case "trim_clip": return args?.path;
     case "list_mics": return [
       { id: "mic-usb", name: "Mikrofon (fifine Microphone)", isDefault: true },
       { id: "mic-headset", name: "Fejhallgató mikrofonja (SteelSeries Arctis Nova 5)", isDefault: false },

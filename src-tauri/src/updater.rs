@@ -196,6 +196,7 @@ fn prepare_exit(app: &AppHandle) {
 fn capture_busy(app: &AppHandle) -> bool {
     let st = crate::state(app);
     st.save_in_progress.load(Ordering::SeqCst)
+        || st.trim_in_progress.load(Ordering::SeqCst)
         || st
             .engine
             .lock()

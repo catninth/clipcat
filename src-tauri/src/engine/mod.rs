@@ -307,6 +307,12 @@ pub fn disk_buffer_available() -> bool {
     disk::ffmpeg_available()
 }
 
+pub fn ffmpeg_command() -> Option<std::process::Command> {
+    let mut command = std::process::Command::new(sys::ffmpeg()?);
+    sys::hide_console(&mut command);
+    Some(command)
+}
+
 fn cs(text: &str) -> CString {
     CString::new(text.replace('\0', "")).unwrap_or_default()
 }

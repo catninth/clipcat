@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { cx, formatDate, formatSize, gameOf } from "../lib/format";
+import { cx, formatDate, formatDuration, formatSize, gameOf } from "../lib/format";
 import { t } from "../lib/i18n";
 import { convertFileSrc, invoke } from "../lib/tauri";
 import type { Clip } from "../lib/tauri";
+import { canTrim, clampEnd, clampStart, isWholeClip } from "../lib/trim";
+import { Trimmer } from "./Trimmer";
 import { Button } from "./ui";
 
 interface Props {
@@ -11,9 +13,19 @@ interface Props {
   onClose: () => void;
   onDelete: (clip: Clip) => void;
   onRenamed: (previous: Clip, updated: Clip) => void;
+  onTrimmed: () => void;
   onPrevious?: () => void;
   onNext?: () => void;
 }
+
+interface TrimRange {
+  duration: number;
+  start: number;
+  end: number;
+}
+
+// Close enough to the end handle to loop before the video runs past it.
+const LOOP_MARGIN = 0.03;
 
 // Highlight by dimming: the background recedes while the player arrives as a material surface.
 // Keep the modal in the DOM so its entrance and exit can be animated.
@@ -58,7 +70,7 @@ function releaseVideo(player: HTMLVideoElement) {
   player.load();
 }
 
-function PlayingClip({ clip, open, onClose, onDelete, onRenamed, onPrevious, onNext, focusDialog }:
+function PlayingClip({ clip, open, onClose, onDelete, onRenamed, onTrimmed, onPrevious, onNext, focusDialog }:
   Omit<Props, "clip" | "playbackKey"> & { clip: Clip; open: boolean; focusDialog: (dialog: HTMLDivElement) => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
@@ -70,10 +82,16 @@ function PlayingClip({ clip, open, onClose, onDelete, onRenamed, onPrevious, onN
   const [draft, setDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [duration, setDuration] = useState(NaN);
+  const [trim, setTrim] = useState<TrimRange | null>(null);
+  const [time, setTime] = useState(0);
+  const [paused, setPaused] = useState(true);
+  const [confirmReplace, setConfirmReplace] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const renameButton = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef(false);
   const editing = draft !== null;
+  const trimming = trim !== null;
   const extension = clip.name.slice(clip.name.lastIndexOf("."));
 
   useEffect(() => {
@@ -115,14 +133,24 @@ function PlayingClip({ clip, open, onClose, onDelete, onRenamed, onPrevious, onN
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      if (editing) {
-        if (!busy) { setDraft(null); setError(""); }
-      } else onClose();
+      if (e.defaultPrevented) return;
+      if (e.key === " ") {
+        // The file name field takes spaces as text
+        if (editing || !ready || busy) return;
+        // Also stops the focused button or native controls from reacting to the same press
+        e.preventDefault();
+        if (!e.repeat) togglePlay();
+      } else if (e.key === "Escape") {
+        if (editing) {
+          if (!busy) { setDraft(null); setError(""); }
+        } else if (trimming) {
+          if (!busy) setTrim(null);
+        } else onClose();
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, editing, busy, onClose]);
+  }, [open, editing, trimming, ready, busy, onClose, trim]);
 
   useEffect(() => {
     if (editing) {
@@ -134,6 +162,20 @@ function PlayingClip({ clip, open, onClose, onDelete, onRenamed, onPrevious, onN
       renameButton.current?.focus();
     }
   }, [editing, busy]);
+
+  // Follow the video every frame: timeupdate is too coarse for the playhead and the loop.
+  const end = trim?.end;
+  const start = trim?.start;
+  useEffect(() => {
+    if (end === undefined || start === undefined || busy) return;
+    const player = video.current!;
+    let frame = requestAnimationFrame(function follow() {
+      if (!player.paused && player.currentTime >= end - LOOP_MARGIN) player.currentTime = start;
+      setTime(player.currentTime);
+      frame = requestAnimationFrame(follow);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [start, end, busy]);
 
   // Always resolve from the handle: another clip may now occupy the original pathname.
   const act = async (action: (current: Clip) => Promise<void> | void) => {
@@ -161,6 +203,55 @@ function PlayingClip({ clip, open, onClose, onDelete, onRenamed, onPrevious, onN
     onClose();
   };
 
+  const seek = (seconds: number) => {
+    video.current!.currentTime = seconds;
+    setTime(seconds);
+  };
+
+  const startTrim = () => {
+    const player = video.current!;
+    player.pause();
+    setTime(player.currentTime);
+    setConfirmDelete(false);
+    setConfirmReplace(false);
+    setError("");
+    setTrim({ duration, start: 0, end: duration });
+  };
+
+  const moveStart = (seconds: number) => {
+    const next = clampStart(seconds, trim!.end);
+    setTrim({ ...trim!, start: next });
+    seek(next);
+  };
+
+  const moveEnd = (seconds: number) => {
+    const next = clampEnd(seconds, trim!.start, trim!.duration);
+    setTrim({ ...trim!, end: next });
+    seek(next);
+  };
+
+  const togglePlay = () => {
+    const player = video.current!;
+    if (!player.paused) {
+      player.pause();
+      return;
+    }
+    if (trim && player.currentTime >= trim.end - LOOP_MARGIN) seek(trim.start);
+    void player.play().catch(() => {});
+  };
+
+  // The player reads through its own handle, which lets the original move to the Recycle Bin.
+  const saveTrim = (replace: boolean) => {
+    const range = trim!;
+    video.current!.pause();
+    void act(async (current) => {
+      await invoke("trim_clip", { path: current.path, start: range.start, end: range.end, replace });
+      onTrimmed();
+      finish();
+    });
+    setConfirmReplace(false);
+  };
+
   return (
     <div ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-label={clip.name}
       className={cx(
@@ -169,52 +260,107 @@ function PlayingClip({ clip, open, onClose, onDelete, onRenamed, onPrevious, onN
       )}
     >
       <div className="relative">
-        <video ref={video} controls className="block max-h-[calc(100vh-180px)] w-full rounded-xl bg-black shadow-[0_0_0_1px_var(--color-line),0_24px_64px_rgba(0,0,0,.6)]" />
-        {onPrevious && <StepButton previous onClick={onPrevious} disabled={busy} />}
-        {onNext && <StepButton onClick={onNext} disabled={busy} />}
+        <video
+          ref={video}
+          controls={!trimming}
+          className={cx(
+            "block w-full rounded-xl bg-black shadow-[0_0_0_1px_var(--color-line),0_24px_64px_rgba(0,0,0,.6)]",
+            trimming ? "max-h-[calc(100vh-300px)]" : "max-h-[calc(100vh-180px)]",
+          )}
+          onClick={trimming && !busy ? togglePlay : undefined}
+          onDurationChange={(e) => setDuration(e.currentTarget.duration)}
+          onPlay={() => setPaused(false)}
+          onPause={() => setPaused(true)}
+        />
+        {onPrevious && !trimming && <StepButton previous onClick={onPrevious} disabled={busy} />}
+        {onNext && !trimming && <StepButton onClick={onNext} disabled={busy} />}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {draft !== null ? (
-          <form className="flex min-w-0 flex-1 items-center gap-2" onSubmit={(e) => {
-            e.preventDefault();
-            if (!draft.trim()) return;
-            void act(async (current) => {
-              const updated = await invoke<Clip>("rename_clip", { path: current.path, newStem: draft });
-              onRenamed(current, updated);
-              setDraft(null);
-            });
-          }}>
-            <label className="flex min-w-0 flex-1 items-baseline gap-2">
-              <span className="text-muted">{t("player.fileName")}</span>
-              <input ref={input} value={draft} disabled={busy} spellCheck={false}
-                className="h-[34px] min-w-16 flex-1 rounded-lg bg-panel-2 px-2.5 select-text"
-                onChange={(e) => { setDraft(e.target.value); setError(""); }} />
-            </label>
-            <span className="text-muted">{extension}</span>
-            <Button type="submit" variant="primary" disabled={busy || !draft.trim()}>{t("player.saveName")}</Button>
-            <Button disabled={busy} onClick={() => { setDraft(null); setError(""); }}>{t("player.cancelRename")}</Button>
-          </form>
-        ) : (
-          <div className="min-w-28 flex-1">
-            <div className="truncate text-[15px] font-semibold tracking-[-.01em]" title={clip.name}>{clip.name}</div>
-            <div className="text-[12.5px] text-muted tabular">{gameOf(clip)} · {formatDate(clip.created)} · {formatSize(clip.size)}</div>
-          </div>
-        )}
-        <div className={cx("flex flex-wrap gap-2", editing && "hidden")}>
-          <Button disabled={!ready || busy} onClick={() => void act((c) => invoke("reveal_clip", { path: c.path }))}>{t("player.reveal")}</Button>
-          <Button disabled={!ready || busy} onClick={() => void act(async (c) => { await invoke("open_clip", { path: c.path }); finish(); })}>{t("player.openExternal")}</Button>
-          <Button ref={renameButton} disabled={!ready || busy} onClick={() => {
-            setConfirmDelete(false);
-            setError("");
-            setDraft(clip.name.slice(0, -extension.length));
-          }}>{t("player.rename")}</Button>
-          <Button disabled={!ready || busy} variant={confirmDelete ? "confirm" : "danger"}
-            onClick={confirmDelete ? () => void act((c) => { finish(); onDelete(c); }) : () => setConfirmDelete(true)}>
-            {t(confirmDelete ? "player.deleteConfirm" : "player.delete")}
+      {trim && (
+        <Trimmer
+          duration={trim.duration}
+          start={trim.start}
+          end={trim.end}
+          time={time}
+          disabled={busy}
+          onStart={moveStart}
+          onEnd={moveEnd}
+          onSeek={seek}
+        />
+      )}
+      {trim ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            className="w-[34px] px-0!"
+            disabled={busy}
+            title={t(paused ? "player.trimPlay" : "player.trimPause")}
+            aria-label={t(paused ? "player.trimPlay" : "player.trimPause")}
+            onClick={togglePlay}
+          >
+            <svg viewBox="0 0 16 16" className="size-4" fill="currentColor" aria-hidden>
+              <path d={paused ? "M4.5 2.5v11a.5.5 0 0 0 .76.43l9-5.5a.5.5 0 0 0 0-.86l-9-5.5a.5.5 0 0 0-.76.43Z" : "M4 2.5h3v11H4zM9 2.5h3v11H9z"} />
+            </svg>
           </Button>
-          <Button onClick={onClose}>{t("player.close")}</Button>
+          <div className="min-w-28 flex-1 pl-1.5">
+            <div className="text-[13px] font-semibold tabular">{`${formatDuration(time)} / ${formatDuration(trim.duration)}`}</div>
+            {busy && <div className="truncate text-[12.5px] text-muted">{t("player.trimSaving")}</div>}
+          </div>
+          <Button variant="primary" disabled={busy || isWholeClip(trim.start, trim.end, trim.duration)} onClick={() => saveTrim(false)}>
+            {t("player.trimSaveCopy")}
+          </Button>
+          <Button
+            variant={confirmReplace ? "confirm" : "danger"}
+            disabled={busy || isWholeClip(trim.start, trim.end, trim.duration)}
+            onClick={confirmReplace ? () => saveTrim(true) : () => setConfirmReplace(true)}
+          >
+            {t(confirmReplace ? "player.trimReplaceConfirm" : "player.trimReplace")}
+          </Button>
+          <Button disabled={busy} onClick={() => { setTrim(null); setError(""); }}>{t("player.trimCancel")}</Button>
         </div>
-      </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          {draft !== null ? (
+            <form className="flex min-w-0 flex-1 items-center gap-2" onSubmit={(e) => {
+              e.preventDefault();
+              if (!draft.trim()) return;
+              void act(async (current) => {
+                const updated = await invoke<Clip>("rename_clip", { path: current.path, newStem: draft });
+                onRenamed(current, updated);
+                setDraft(null);
+              });
+            }}>
+              <label className="flex min-w-0 flex-1 items-baseline gap-2">
+                <span className="text-muted">{t("player.fileName")}</span>
+                <input ref={input} value={draft} disabled={busy} spellCheck={false}
+                  className="h-[34px] min-w-16 flex-1 rounded-lg bg-panel-2 px-2.5 select-text"
+                  onChange={(e) => { setDraft(e.target.value); setError(""); }} />
+              </label>
+              <span className="text-muted">{extension}</span>
+              <Button type="submit" variant="primary" disabled={busy || !draft.trim()}>{t("player.saveName")}</Button>
+              <Button disabled={busy} onClick={() => { setDraft(null); setError(""); }}>{t("player.cancelRename")}</Button>
+            </form>
+          ) : (
+            <div className="min-w-28 flex-1">
+              <div className="truncate text-[15px] font-semibold tracking-[-.01em]" title={clip.name}>{clip.name}</div>
+              <div className="text-[12.5px] text-muted tabular">{gameOf(clip)} · {formatDate(clip.created)} · {formatSize(clip.size)}</div>
+            </div>
+          )}
+          <div className={cx("flex flex-wrap gap-2", editing && "hidden")}>
+            <Button disabled={!ready || busy || !canTrim(duration)} onClick={startTrim}>{t("player.trim")}</Button>
+            <Button disabled={!ready || busy} onClick={() => void act((c) => invoke("reveal_clip", { path: c.path }))}>{t("player.reveal")}</Button>
+            <Button disabled={!ready || busy} onClick={() => void act(async (c) => { await invoke("open_clip", { path: c.path }); finish(); })}>{t("player.openExternal")}</Button>
+            <Button ref={renameButton} disabled={!ready || busy} onClick={() => {
+              setConfirmDelete(false);
+              setError("");
+              setDraft(clip.name.slice(0, -extension.length));
+            }}>{t("player.rename")}</Button>
+            <Button disabled={!ready || busy} variant={confirmDelete ? "confirm" : "danger"}
+              onClick={confirmDelete ? () => void act((c) => { finish(); onDelete(c); }) : () => setConfirmDelete(true)}>
+              {t(confirmDelete ? "player.deleteConfirm" : "player.delete")}
+            </Button>
+            <Button onClick={onClose}>{t("player.close")}</Button>
+          </div>
+        </div>
+      )}
       {error && <p role="alert" className="text-danger-soft">{error}</p>}
     </div>
   );

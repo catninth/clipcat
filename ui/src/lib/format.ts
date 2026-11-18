@@ -1,5 +1,9 @@
 import { i18n, t } from "./i18n";
+import { convertFileSrc } from "./tauri";
 import type { Clip } from "./tauri";
+
+// The webview keeps media data per URL, even with no-store: a file replaced in place needs a new URL.
+export const clipSrc = (clip: Clip) => `${convertFileSrc(clip.path)}?v=${clip.modified}-${clip.size}`;
 
 export function prettyHotkey(hotkey: string | undefined): string {
   if (!hotkey) return t("hotkey.none");
