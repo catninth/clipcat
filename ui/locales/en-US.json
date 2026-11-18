@@ -203,7 +203,7 @@
     "tray.resumeReplay": "Resume replay buffer",
     "tray.lastClipFolder": "Last clip folder",
     "tray.settings": "Settings",
-    "tray.quit": "Exit (stop recording)",
+    "tray.quit": "Exit",
     "update.pill": "Update: v{version}",
     "update.pillTitle": "Download and install ClipCat v{version} (restarts ClipCat)",
     "update.downloading": "Downloading…",

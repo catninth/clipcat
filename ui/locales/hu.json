@@ -203,7 +203,7 @@
     "tray.resumeReplay": "Visszajátszás folytatása",
     "tray.lastClipFolder": "Legutóbbi klip mappája",
     "tray.settings": "Beállítások",
-    "tray.quit": "Kilépés (felvétel leállítása)",
+    "tray.quit": "Kilépés",
     "update.pill": "Frissítés: v{version}",
     "update.pillTitle": "A ClipCat v{version} letöltése és telepítése (a ClipCat újraindul)",
     "update.downloading": "Letöltés…",
