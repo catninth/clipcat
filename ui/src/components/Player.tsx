@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cx, formatDate, formatDuration, formatSize, gameOf } from "../lib/format";
 import { t } from "../lib/i18n";
 import { convertFileSrc, invoke } from "../lib/tauri";
@@ -130,7 +130,9 @@ function PlayingClip({ clip, open, onClose, onDelete, onRenamed, onTrimmed, onPr
     return () => { alive = false; window.removeEventListener("focus", sync); };
   }, [open, ready, clip, onRenamed]);
 
-  useEffect(() => {
+  // Layout effect: the handlers must see the state of the frame the user is looking at. A passive
+  // effect can run after the browser has already delivered a key press to the previous handlers.
+  useLayoutEffect(() => {
     if (!open) return;
     // Space is claimed in the capture phase, before the focused video's native controls or a
     // focused button can toggle too, which would pause and immediately resume playback.
