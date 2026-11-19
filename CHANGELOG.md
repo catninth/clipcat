@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.3 – 2026-11-19
+
+- Follow the selected microphone when Windows gives it a new device ID, for example after moving it to another USB port, instead of warning on every start.
+- Remember a dismissed microphone warning across restarts until that microphone returns.
+- Show the missing microphone's name in bold and shorten the warning text.
+
 ## 0.10.2 – 2026-11-19
 
 - Trim clips in the player and save the result as a copy or replace the original.
