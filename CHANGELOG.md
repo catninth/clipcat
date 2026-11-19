@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.0 – 2026-11-19
+
 - Move playback controls below the video and preview frames by hovering over the timeline. Adjust playback from 0.1× to 5×, skip five seconds, or loop a selected range.
 - Save a frame-accurate selection as a sibling MP4. The optional trash checkbox recycles the original after the new clip has been saved.
 
