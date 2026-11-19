@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.10.4 – 2026-11-19
+
+- Handle Space and Escape in the player right after it opens or changes state, instead of occasionally ignoring the key press.
+
 ## 0.10.3 – 2026-11-19
 
 - Follow the selected microphone when Windows gives it a new device ID, for example after moving it to another USB port, instead of warning on every start.
