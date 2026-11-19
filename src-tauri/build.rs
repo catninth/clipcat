@@ -12,6 +12,7 @@ fn main() {
             "save_settings",
             "buffer_budget",
             "list_mics",
+            "dismiss_mic_warning",
             "list_monitors",
             "disk_buffer_available",
             "save_replay",

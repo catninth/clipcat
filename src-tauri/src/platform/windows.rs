@@ -87,6 +87,34 @@ pub fn default_mic_id() -> Option<String> {
     }
 }
 
+/// Every capture endpoint Windows still knows, in any state (active, disabled, unplugged, not present),
+/// as (endpoint ID, hardware fingerprint). An endpoint absent from this list was deleted and its ID never returns.
+/// None when the registry cannot be read, so callers never mistake a failed lookup for a deleted device.
+pub fn mic_endpoints() -> Option<Vec<(String, String)>> {
+    use winreg::{enums::{HKEY_LOCAL_MACHINE, KEY_READ}, RegKey};
+
+    // Endpoint IDs are "{flow}.{guid}"; capture endpoints use flow 0.0.1.
+    const CAPTURE: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture";
+    const PARENT_HARDWARE: &str = "{b3f8fa53-0004-438e-9003-51a46e139bfc},2";
+    const ENDPOINT_NAME: &str = "{a45c254e-df1c-4efd-8020-67d146a850e0},2";
+    let root = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(CAPTURE, KEY_READ).ok()?;
+    let mut endpoints = Vec::new();
+    for guid in root.enum_keys() {
+        let guid = guid.ok()?;
+        let fingerprint = root
+            .open_subkey_with_flags(format!(r"{guid}\Properties"), KEY_READ)
+            .ok()
+            .and_then(|props| {
+                let parent: String = props.get_value(PARENT_HARDWARE).ok()?;
+                let name: String = props.get_value(ENDPOINT_NAME).unwrap_or_default();
+                Some(crate::microphone::fingerprint(&parent, &name))
+            })
+            .unwrap_or_default();
+        endpoints.push((format!("{{0.0.1.00000000}}.{}", guid.to_ascii_lowercase()), fingerprint));
+    }
+    Some(endpoints)
+}
+
 /// CCD exposes the monitor's model name even when its driver is "Generic PnP Monitor".
 /// Match by device interface path so adapter ordering and cloned displays cannot swap names.
 fn monitor_model_names() -> HashMap<String, String> {

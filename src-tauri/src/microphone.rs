@@ -24,6 +24,11 @@ impl WarningTracker {
         self.warning.as_ref()
     }
 
+    /// The input of the current outage, or empty when there is none.
+    pub fn device_key(&self) -> &str {
+        &self.device_key
+    }
+
     /// Return true only when a new failure incident needs the user's attention.
     pub fn update(
         &mut self,
@@ -70,24 +75,91 @@ pub fn prepare_settings(old: &Settings, new: &mut Settings) {
     if old.mic_device == new.mic_device {
         new.last_mic_device.clone_from(&old.last_mic_device);
         new.last_mic_name.clone_from(&old.last_mic_name);
+        new.last_mic_fingerprint.clone_from(&old.last_mic_fingerprint);
     } else {
         new.last_mic_device.clear();
         new.last_mic_name.clear();
+        new.last_mic_fingerprint.clear();
     }
+    new.dismissed_mic_warning.clone_from(&old.dismissed_mic_warning);
+}
+
+/// Hardware identity of an endpoint: the parent device's hardware ID without its port-dependent
+/// instance suffix, plus the endpoint's own name to tell a device's inputs apart.
+/// "{1}.USB\VID_3142&PID_A010&MI_00\7&1065BD9&0&0000" + "Mikrofon" -> "USB\VID_3142&PID_A010&MI_00|Mikrofon"
+pub fn fingerprint(parent: &str, endpoint_name: &str) -> String {
+    let parent = parent.trim().replace('\0', "");
+    let parent = match parent.split_once("}.") {
+        Some((prefix, rest)) if prefix.starts_with('{') => rest,
+        _ => parent.as_str(),
+    };
+    let hardware = parent.rsplit_once('\\').map_or(parent, |(hardware, _)| hardware);
+    if hardware.is_empty() {
+        return String::new();
+    }
+    format!("{}|{}", hardware.to_ascii_uppercase(), endpoint_name.trim().replace('\0', ""))
+}
+
+fn endpoint_fingerprint<'a>(endpoints: &'a [(String, String)], id: &str) -> Option<&'a str> {
+    endpoints
+        .iter()
+        .find(|(endpoint, _)| endpoint.eq_ignore_ascii_case(id))
+        .map(|(_, fingerprint)| fingerprint.as_str())
+}
+
+/// A remembered input whose endpoint Windows deleted (it is absent in every state) can never come back
+/// under its old ID. Follow it only to the single available input with the same hardware fingerprint;
+/// zero or several matches stay a warning instead of a guess.
+fn rebind_target<'a>(
+    settings: &Settings,
+    target: &str,
+    devices: &'a [(String, String)],
+    endpoints: &[(String, String)],
+) -> Option<&'a (String, String)> {
+    let fingerprint = settings.last_mic_fingerprint.as_str();
+    if fingerprint.is_empty()
+        || !settings.last_mic_device.eq_ignore_ascii_case(target)
+        || endpoint_fingerprint(endpoints, target).is_some()
+    {
+        return None;
+    }
+    let mut matches = devices
+        .iter()
+        .filter(|(id, _)| endpoint_fingerprint(endpoints, id) == Some(fingerprint));
+    let found = matches.next()?;
+    matches.next().is_none().then_some(found)
 }
 
 /// Resolve only the requested physical input. Missing inputs retain their identity for retries.
 /// The system default is consulted only before a physical input has been remembered.
+/// `endpoints` lists every endpoint the system still knows (see `platform::mic_endpoints`).
 pub fn reconcile_selection(
     settings: &mut Settings,
     devices: &[(String, String)],
     default_id: Option<&str>,
+    endpoints: Option<&[(String, String)]>,
 ) -> Option<String> {
     if settings.mic_mode == "off" {
         return None;
     }
-    let target = preferred_device(settings).or_else(|| default_id.and_then(concrete_device))?;
-    let (id, name) = devices.iter().find(|(id, _)| id == target)?;
+    let target = preferred_device(settings)
+        .or_else(|| default_id.and_then(concrete_device))?
+        .to_owned();
+    let (id, name) = match devices.iter().find(|(id, _)| *id == target) {
+        Some(found) => found,
+        None => {
+            let found = rebind_target(settings, &target, devices, endpoints?)?;
+            if settings.mic_device == target {
+                settings.mic_device.clone_from(&found.0);
+            }
+            found
+        }
+    };
+    match endpoints.and_then(|endpoints| endpoint_fingerprint(endpoints, id)) {
+        Some(fingerprint) if !fingerprint.is_empty() => settings.last_mic_fingerprint = fingerprint.to_owned(),
+        _ if settings.last_mic_device != *id => settings.last_mic_fingerprint.clear(),
+        _ => (),
+    }
     settings.last_mic_device.clone_from(id);
     settings.last_mic_name = name.replace('\0', "");
     Some(id.clone())
@@ -111,18 +183,114 @@ mod tests {
         ]
     }
 
+    fn reconcile(settings: &mut Settings, devices: &[(String, String)], default_id: Option<&str>) -> Option<String> {
+        reconcile_selection(settings, devices, default_id, None)
+    }
+
+    const FIFINE: &str = r"USB\VID_3142&PID_A010&MI_00|Mikrofon";
+
+    /// A fifine input remembered under an endpoint ID that Windows has since replaced.
+    fn remembered_fifine(mic_device: &str) -> Settings {
+        Settings {
+            mic_device: mic_device.into(),
+            last_mic_device: "old-id".into(),
+            last_mic_name: "Mikrofon (fifine Microphone)".into(),
+            last_mic_fingerprint: FIFINE.into(),
+            ..enabled_settings()
+        }
+    }
+
+    fn after_port_change() -> (Vec<(String, String)>, Vec<(String, String)>) {
+        let devices = vec![
+            ("new-id".into(), "Mikrofon (fifine Microphone)".into()),
+            ("webcam-id".into(), "Webcam".into()),
+        ];
+        let endpoints = vec![
+            ("NEW-ID".into(), FIFINE.into()),
+            ("webcam-id".into(), r"USB\VID_1111&PID_2222&MI_02|Mikrofon".into()),
+        ];
+        (devices, endpoints)
+    }
+
+    #[test]
+    fn fingerprint_drops_the_flow_prefix_and_port_dependent_instance() {
+        assert_eq!(fingerprint(r"{1}.USB\VID_3142&PID_A010&MI_00\7&1065BD9&0&0000", " Mikrofon "), FIFINE);
+        assert_eq!(fingerprint(r"usb\vid_3142&pid_a010&mi_00\8&2&0", "Mikrofon"), FIFINE);
+        assert_eq!(fingerprint("", "Mikrofon"), "");
+    }
+
+    #[test]
+    fn deleted_endpoint_follows_the_single_input_with_the_same_hardware() {
+        let (devices, endpoints) = after_port_change();
+        let mut settings = remembered_fifine("default");
+        assert_eq!(
+            reconcile_selection(&mut settings, &devices, Some("webcam-id"), Some(&endpoints)).as_deref(),
+            Some("new-id")
+        );
+        assert_eq!(settings.mic_device, "default");
+        assert_eq!(settings.last_mic_device, "new-id");
+        assert_eq!(settings.last_mic_fingerprint, FIFINE);
+    }
+
+    #[test]
+    fn explicit_selection_follows_its_deleted_endpoint_too() {
+        let (devices, endpoints) = after_port_change();
+        let mut settings = remembered_fifine("old-id");
+        assert_eq!(
+            reconcile_selection(&mut settings, &devices, None, Some(&endpoints)).as_deref(),
+            Some("new-id")
+        );
+        assert_eq!(settings.mic_device, "new-id");
+    }
+
+    #[test]
+    fn unplugged_endpoint_is_waited_for_instead_of_replaced() {
+        let (devices, mut endpoints) = after_port_change();
+        endpoints.push(("old-id".into(), FIFINE.into()));
+        let mut settings = remembered_fifine("default");
+        let before = settings.clone();
+        assert_eq!(reconcile_selection(&mut settings, &devices, None, Some(&endpoints)), None);
+        assert_eq!(settings, before);
+    }
+
+    #[test]
+    fn ambiguous_unknown_or_unfingerprinted_inputs_are_never_guessed() {
+        let (mut devices, mut endpoints) = after_port_change();
+        devices.push(("twin-id".into(), "Mikrofon (fifine Microphone)".into()));
+        endpoints.push(("twin-id".into(), FIFINE.into()));
+        let mut settings = remembered_fifine("default");
+        assert_eq!(reconcile_selection(&mut settings, &devices, None, Some(&endpoints)), None);
+
+        let (devices, endpoints) = after_port_change();
+        assert_eq!(reconcile_selection(&mut settings, &devices, None, None), None);
+        settings.last_mic_fingerprint.clear();
+        assert_eq!(reconcile_selection(&mut settings, &devices, None, Some(&endpoints)), None);
+        assert_eq!(settings.last_mic_device, "old-id");
+    }
+
+    #[test]
+    fn resolving_an_input_records_its_fingerprint() {
+        let (devices, endpoints) = after_port_change();
+        let mut settings = enabled_settings();
+        assert_eq!(
+            reconcile_selection(&mut settings, &devices, Some("new-id"), Some(&endpoints)).as_deref(),
+            Some("new-id")
+        );
+        assert_eq!(settings.last_mic_fingerprint, FIFINE);
+    }
+
     #[test]
     fn first_default_is_remembered_and_survives_restart_with_a_different_default() {
         let mut settings = enabled_settings();
         assert_eq!(
-            reconcile_selection(&mut settings, &devices(), Some("headset-id")).as_deref(),
+            reconcile(&mut settings, &devices(), Some("headset-id")).as_deref(),
             Some("headset-id")
         );
         assert_eq!(settings.last_mic_name, "Headset");
         let mut restored: Settings =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(
-            reconcile_selection(&mut restored, &devices(), Some("webcam-id")).as_deref(),
+            reconcile(&mut restored, &devices(), Some("webcam-id")).as_deref(),
             Some("headset-id")
         );
         assert_eq!(restored.mic_device, "default");
@@ -131,15 +299,15 @@ mod tests {
     #[test]
     fn disconnect_preserves_identity_and_reconnect_selects_only_that_input() {
         let mut settings = enabled_settings();
-        reconcile_selection(&mut settings, &devices(), Some("headset-id"));
+        reconcile(&mut settings, &devices(), Some("headset-id"));
         let before = settings.clone();
         assert_eq!(
-            reconcile_selection(&mut settings, &devices()[1..], Some("webcam-id")),
+            reconcile(&mut settings, &devices()[1..], Some("webcam-id")),
             None
         );
         assert_eq!(settings, before);
         assert_eq!(
-            reconcile_selection(&mut settings, &devices(), Some("webcam-id")).as_deref(),
+            reconcile(&mut settings, &devices(), Some("webcam-id")).as_deref(),
             Some("headset-id")
         );
     }
@@ -152,7 +320,7 @@ mod tests {
             ..enabled_settings()
         };
         assert_eq!(
-            reconcile_selection(
+            reconcile(
                 &mut settings,
                 &[("different-id".into(), "Headset".into())],
                 Some("different-id")
@@ -173,7 +341,7 @@ mod tests {
         ] {
             let mut settings = enabled_settings();
             assert_eq!(
-                reconcile_selection(&mut settings, &devices(), default),
+                reconcile(&mut settings, &devices(), default),
                 None
             );
             assert!(settings.last_mic_device.is_empty());
@@ -189,7 +357,7 @@ mod tests {
         };
         let before = settings.clone();
         assert_eq!(
-            reconcile_selection(&mut settings, &devices(), Some("webcam-id")),
+            reconcile(&mut settings, &devices(), Some("webcam-id")),
             None
         );
         assert_eq!(settings, before);
@@ -211,13 +379,13 @@ mod tests {
         assert!(new.last_mic_name.is_empty());
         assert_eq!(preferred_device(&new), Some("missing-id"));
         assert_eq!(
-            reconcile_selection(&mut new, &devices(), Some("headset-id")),
+            reconcile(&mut new, &devices(), Some("headset-id")),
             None
         );
 
         new.mic_device = "webcam-id".into();
         assert_eq!(
-            reconcile_selection(&mut new, &devices(), Some("headset-id")).as_deref(),
+            reconcile(&mut new, &devices(), Some("headset-id")).as_deref(),
             Some("webcam-id")
         );
         assert_eq!(new.last_mic_name, "Webcam");
@@ -250,7 +418,7 @@ mod tests {
         };
         prepare_settings(&old, &mut new);
         assert_eq!(
-            reconcile_selection(&mut new, &devices(), Some("webcam-id")).as_deref(),
+            reconcile(&mut new, &devices(), Some("webcam-id")).as_deref(),
             Some("webcam-id")
         );
     }

@@ -43,6 +43,11 @@ pub fn default_mic_id() -> Option<String> {
     }
 }
 
+/// PulseAudio source names are already stable across ports, so no endpoint history is needed.
+pub fn mic_endpoints() -> Option<Vec<(String, String)>> {
+    None
+}
+
 fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }

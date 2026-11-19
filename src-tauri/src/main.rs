@@ -189,7 +189,18 @@ fn sync_engine_microphone(engine: &mut Engine, settings: &mut Settings) -> Resul
         } else {
             None
         };
-        let device = microphone::reconcile_selection(settings, &devices, default_id.as_deref());
+        // Only consulted when the remembered endpoint is not available, to tell "unplugged" from "deleted".
+        let endpoints = microphone::preferred_device(settings)
+            .filter(|target| !devices.iter().any(|(id, _)| id == target))
+            .and_then(|_| platform::mic_endpoints());
+        let previous = settings.last_mic_device.clone();
+        let device = microphone::reconcile_selection(settings, &devices, default_id.as_deref(), endpoints.as_deref());
+        if !previous.is_empty() && device.is_some() && settings.last_mic_device != previous {
+            logfile::write(&format!(
+                "Microphone endpoint replaced by Windows: {previous} -> {} ({})",
+                settings.last_mic_device, settings.last_mic_name
+            ));
+        }
         engine.reconcile_mic(device.as_deref())?;
         engine.set_mic_enabled(true)?;
         Ok(device.is_some())
@@ -215,10 +226,20 @@ fn sync_microphone(app: &AppHandle) {
     };
     let changed = {
         let mut current = st.settings.lock().unwrap();
-        let changed = current.last_mic_device != settings.last_mic_device || current.last_mic_name != settings.last_mic_name;
+        let changed = current.mic_device != settings.mic_device
+            || current.last_mic_device != settings.last_mic_device
+            || current.last_mic_name != settings.last_mic_name
+            || current.last_mic_fingerprint != settings.last_mic_fingerprint;
         if changed {
+            current.mic_device.clone_from(&settings.mic_device);
             current.last_mic_device.clone_from(&settings.last_mic_device);
             current.last_mic_name.clone_from(&settings.last_mic_name);
+            current.last_mic_fingerprint.clone_from(&settings.last_mic_fingerprint);
+            st.mic_settings_dirty.store(true, Ordering::SeqCst);
+        }
+        // A recovered input re-arms its warning for the next outage.
+        if result == Ok(true) && !current.dismissed_mic_warning.is_empty() {
+            current.dismissed_mic_warning.clear();
             st.mic_settings_dirty.store(true, Ordering::SeqCst);
         }
         if st.mic_settings_dirty.load(Ordering::SeqCst) {
@@ -249,6 +270,9 @@ fn sync_microphone(app: &AppHandle) {
     let new_warning = st.mic_warning.lock().unwrap().update(device, &name, reason);
     if new_warning {
         logfile::write(&format!("Microphone unavailable: {device} ({name}); {result:?}"));
+        if mic_warning_dismissed(app, device) {
+            return;
+        }
         // A persisted status warning survives frontend startup and does not depend on toast preferences.
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.show();
@@ -256,6 +280,57 @@ fn sync_microphone(app: &AppHandle) {
             let _ = window.set_focus();
         }
     }
+}
+
+fn mic_warning_dismissed(app: &AppHandle, device: &str) -> bool {
+    let st = state(app);
+    let dismissed = &st.settings.lock().unwrap().dismissed_mic_warning;
+    !dismissed.is_empty() && dismissed == device
+}
+
+/// The current outage, unless the user already dismissed it for this input (also across restarts).
+fn visible_mic_warning(app: &AppHandle) -> Option<microphone::Warning> {
+    let st = state(app);
+    let tracker = st.mic_warning.lock().unwrap();
+    let warning = tracker.warning()?.clone();
+    (!mic_warning_dismissed(app, tracker.device_key())).then_some(warning)
+}
+
+/// Persist a settings change made outside the settings form and tell open forms about it.
+fn store_mic_settings(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<(), String> {
+    let st = state(app);
+    let updated = {
+        let mut current = st.settings.lock().unwrap();
+        let mut next = current.clone();
+        change(&mut next);
+        settings::save(&next).map_err(|error| tf("error.settingsSave", &[("error", &error)]))?;
+        *current = next.clone();
+        st.mic_settings_dirty.store(false, Ordering::SeqCst);
+        next
+    };
+    let _ = app.emit("settings-changed", &updated);
+    Ok(())
+}
+
+/// Keep this outage silent until the input recovers; a different input's outage still warns.
+#[tauri::command]
+async fn dismiss_mic_warning(app: AppHandle, id: u64) -> Result<(), String> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let device = {
+            let st = state(&handle);
+            let tracker = st.mic_warning.lock().unwrap();
+            match tracker.warning() {
+                Some(warning) if warning.id == id => tracker.device_key().to_owned(),
+                _ => return Ok(()),
+            }
+        };
+        store_mic_settings(&handle, |s| s.dismissed_mic_warning = device)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    refresh_status(&app);
+    Ok(())
 }
 
 /// Push-to-talk: the microphone is audible only while the key is held and briefly afterward.
@@ -575,7 +650,7 @@ fn refresh_status(app: &AppHandle) {
         recording,
         recording_since,
         error: st.engine_error.lock().unwrap().clone(),
-        mic_warning: st.mic_warning.lock().unwrap().warning().cloned(),
+        mic_warning: visible_mic_warning(app),
         encoder,
         buffer_seconds,
     };
@@ -1665,6 +1740,7 @@ fn main() {
             toggle_record,
             set_replay_enabled,
             list_mics,
+            dismiss_mic_warning,
             list_monitors,
             disk_buffer_available,
             buffer_budget,

@@ -24,6 +24,8 @@ export interface Settings {
   micDevice: string;
   lastMicDevice: string;
   lastMicName: string;
+  lastMicFingerprint: string;
+  dismissedMicWarning: string;
   micVolume: number;
   micPttVk: number;
   micPttLabel: string;

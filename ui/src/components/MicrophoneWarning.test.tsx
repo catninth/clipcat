@@ -46,6 +46,21 @@ it("closes on recovery and acknowledges Escape without suppressing future incide
   expect(screen.getByRole("alertdialog")).toBeTruthy();
 });
 
+it("persists OK for this outage and keeps Escape local", async () => {
+  const { invoke } = await import("../lib/tauri");
+  const calls = vi.mocked(invoke);
+  calls.mockClear();
+  const { rerender } = render(<MicrophoneWarning warning={warning} onSettings={vi.fn()} />);
+  fireEvent(screen.getByRole("alertdialog"), new Event("cancel", { bubbles: false, cancelable: true }));
+  await Promise.resolve();
+  expect(calls).not.toHaveBeenCalled();
+
+  rerender(<MicrophoneWarning warning={{ ...warning, id: 2 }} onSettings={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "OK" }));
+  await Promise.resolve();
+  expect(calls).toHaveBeenCalledWith("dismiss_mic_warning", { id: 2 });
+});
+
 it("localizes connection failure details and the unknown device label", () => {
   i18n.lang = "hu";
   i18n.messages = hu;

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dismiss-mic-warning"
+description = "Enables the dismiss_mic_warning command without any pre-configured scope."
+commands.allow = ["dismiss_mic_warning"]
+
+[[permission]]
+identifier = "deny-dismiss-mic-warning"
+description = "Denies the dismiss_mic_warning command without any pre-configured scope."
+commands.deny = ["dismiss_mic_warning"]

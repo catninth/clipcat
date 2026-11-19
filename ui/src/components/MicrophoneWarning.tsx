@@ -1,7 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
-import type { MicWarning } from "../lib/tauri";
+import { invoke, type MicWarning } from "../lib/tauri";
 import { Button } from "./ui";
+
+/// Backend failures here only cost a repeated warning, never the user's settings.
+const quietly = (command: string, args?: Record<string, unknown>) => {
+  Promise.resolve()
+    .then(() => invoke(command, args))
+    .catch(() => undefined);
+};
 
 interface Props {
   warning: MicWarning | null;
@@ -20,6 +27,11 @@ export function MicrophoneWarning({ warning, onSettings }: Props) {
   }, [open]);
 
   const dismiss = () => { if (warning) setDismissed(warning.id); };
+  // OK silences this outage across restarts until the input returns; Escape only closes the dialog.
+  const acknowledge = () => {
+    if (warning) quietly("dismiss_mic_warning", { id: warning.id });
+    dismiss();
+  };
 
   return (
     <dialog
@@ -32,11 +44,16 @@ export function MicrophoneWarning({ warning, onSettings }: Props) {
     >
       <h2 id="microphone-warning-title" className="text-[17px] font-semibold tracking-[-.01em]">{t("microphone.warningTitle")}</h2>
       <p id="microphone-warning-description" className="mt-3 whitespace-pre-line break-words text-[13px] leading-relaxed text-muted">
-        {warning && t(`microphone.${warning.reason}`, { name: warning.deviceName || t("microphone.defaultName") })}
+        {warning && t(`microphone.${warning.reason}`).split("{name}").map((part, index) => (
+          <Fragment key={index}>
+            {index > 0 && <strong className="font-semibold text-fg">{warning.deviceName || t("microphone.defaultName")}</strong>}
+            {part}
+          </Fragment>
+        ))}
       </p>
       <div className="mt-5 flex justify-end gap-2">
         <Button onClick={() => { dismiss(); onSettings(); }}>{t("microphone.openSettings")}</Button>
-        <Button variant="primary" onClick={dismiss} autoFocus>{t("microphone.dismiss")}</Button>
+        <Button variant="primary" onClick={acknowledge} autoFocus>{t("microphone.dismiss")}</Button>
       </div>
     </dialog>
   );

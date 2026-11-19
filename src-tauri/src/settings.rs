@@ -35,6 +35,11 @@ pub struct Settings {
     pub last_mic_device: String,
     /// Display label only; devices are matched by their stable platform ID.
     pub last_mic_name: String,
+    /// Hardware identity of the remembered input (Windows: parent hardware ID and endpoint name).
+    /// Used only to follow that input to a new endpoint ID after its old endpoint was deleted.
+    pub last_mic_fingerprint: String,
+    /// Device key of the outage warning the user dismissed; it stays silent until that input recovers.
+    pub dismissed_mic_warning: String,
     /// Microphone loudness in clips, in percent; 100 = unchanged
     pub mic_volume: u32,
     /// Windows virtual-key code (the UI's KeyboardEvent.keyCode; 0x04-0x06: middle/side mouse buttons)
@@ -92,6 +97,8 @@ impl Default for Settings {
             mic_device: "default".into(),
             last_mic_device: String::new(),
             last_mic_name: String::new(),
+            last_mic_fingerprint: String::new(),
+            dismissed_mic_warning: String::new(),
             mic_volume: 100,
             // Legacy ShadowPlay push-to-talk key (VK_OEM_3, "ö" on a Hungarian keyboard)
             mic_ptt_vk: 0xC0,
@@ -181,7 +188,9 @@ impl Settings {
             && (self.last_mic_device.trim().is_empty() || self.last_mic_device == "default"))
             || self.last_mic_device.contains('\0')
             || self.last_mic_name.contains('\0')
-            || (self.last_mic_device.is_empty() && !self.last_mic_name.is_empty())
+            || self.last_mic_fingerprint.contains('\0')
+            || self.dismissed_mic_warning.contains('\0')
+            || (self.last_mic_device.is_empty() && !(self.last_mic_name.is_empty() && self.last_mic_fingerprint.is_empty()))
         {
             return Err(t("validate.micDevice"));
         }
@@ -274,8 +283,17 @@ fn from_json(json: &str) -> Settings {
     if s.last_mic_device.trim().is_empty() || s.last_mic_device == "default" || s.last_mic_device.contains('\0') {
         s.last_mic_device.clear();
         s.last_mic_name.clear();
-    } else if s.last_mic_name.contains('\0') {
-        s.last_mic_name.clear();
+        s.last_mic_fingerprint.clear();
+    } else {
+        if s.last_mic_name.contains('\0') {
+            s.last_mic_name.clear();
+        }
+        if s.last_mic_fingerprint.contains('\0') {
+            s.last_mic_fingerprint.clear();
+        }
+    }
+    if s.dismissed_mic_warning.contains('\0') {
+        s.dismissed_mic_warning.clear();
     }
     s.mic_volume = s.mic_volume.min(MAX_MIC_VOLUME);
     if !is_ptt_key_supported(s.mic_ptt_vk) {

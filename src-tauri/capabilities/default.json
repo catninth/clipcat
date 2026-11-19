@@ -19,6 +19,7 @@
     "allow-save-settings",
     "allow-buffer-budget",
     "allow-list-mics",
+    "allow-dismiss-mic-warning",
     "allow-list-monitors",
     "allow-disk-buffer-available",
     "allow-save-replay",
