@@ -29,7 +29,8 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
     // The preview serves the sample by path, so the path doubles as the playback token
     case "start_playback": return args?.path;
     case "resolve_playback": return args?.path;
-    case "trim_clip": return args?.path;
+    case "export_clip_range":
+      throw new Error(settings.language === "hu" ? "A szakasz mentéséhez nyisd meg a ClipCat asztali alkalmazást." : "Open the ClipCat desktop app to save the selection.");
     case "list_mics": return [
       { id: "mic-usb", name: "Mikrofon (fifine Microphone)", isDefault: true },
       { id: "mic-headset", name: "Fejhallgató mikrofonja (SteelSeries Arctis Nova 5)", isDefault: false },

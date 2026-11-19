@@ -920,6 +920,10 @@ fn stop_engine(app: &AppHandle) {
 
 fn quit(app: &AppHandle) {
     stop_engine(app);
+    // Let the cancelled export reap its FFmpeg child and remove its temporary file before exiting.
+    while state(app).trim_in_progress.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(25));
+    }
     app.exit(0);
 }
 
@@ -1422,35 +1426,52 @@ fn delete_clip(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Keep `start..end` seconds of a clip; returns the resulting file's path.
+/// Export the selected interval and optionally recycle the exact entry that was playing.
 #[tauri::command]
-async fn trim_clip(app: AppHandle, path: String, start: f64, end: f64, replace: bool) -> Result<String, String> {
-    let clip = clip_in_output_dir(&app, &path)?;
+async fn export_clip_range(app: AppHandle, token: String, path: String, start_seconds: f64, end_seconds: f64,
+    trash_original: bool) -> Result<trim::Exported, String> {
+    let root = PathBuf::from(current_settings(&app).output_dir);
+    let source = state(&app).playback.export_source(&root, &token, Path::new(&path))?;
     tauri::async_runtime::spawn_blocking(move || {
         let st = state(&app);
+        let check = || -> Result<PathBuf, String> {
+            if st.quitting.load(Ordering::SeqCst) || st.installing.load(Ordering::SeqCst) { return Err(t("update.busy")); }
+            if Path::new(&current_settings(&app).output_dir) != root { return Err(t("error.clipOutsideOutput")); }
+            let current = source.location(&root)?;
+            let recording = st.engine.lock().unwrap().as_ref().and_then(|engine| engine.recording_path().map(PathBuf::from));
+            if let Some(recording) = recording {
+                if recording.canonicalize().ok() == current.canonicalize().ok() { return Err(t("error.clipRecording")); }
+            }
+            Ok(current)
+        };
         {
             // Held only to check: an update must not begin between these checks and the flag.
             let _operation = st.operations.lock().unwrap();
-            if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
-                return Err(t("update.busy"));
-            }
+            check()?;
             if st.trim_in_progress.swap(true, Ordering::SeqCst) {
-                return Err(t("error.trimBusy"));
+                return Err(t("error.clipExportBusy"));
             }
         }
-        let result = trim::trim(&clip, start, end, replace, &st.quitting);
-        st.trim_in_progress.store(false, Ordering::SeqCst);
-        // Keep the path form the UI uses, not the canonical one
-        let saved = Path::new(&path).with_file_name(result?.file_name().unwrap_or_default());
-        let saved = saved.to_string_lossy().into_owned();
-        if replace {
+        let _busy = trim::Busy(&st.trim_in_progress);
+        let temp = trim::stage(&root, &source, start_seconds, end_seconds, engine::ffmpeg_command, &st.quitting)?;
+        let operation = st.operations.lock().unwrap();
+        let original = check()?;
+        let saved = trim::publish(temp, &root, &original)?;
+        let saved_path = saved.path.clone();
+        let result = trim::finish(saved, trash_original, || {
+            let current = check()?;
+            trim::recycle_selected(&source, &root, &current)?;
             let mut s = st.settings.lock().unwrap();
-            if s.last_clip.as_deref() == Some(path.as_str()) {
-                s.last_clip = Some(saved.clone());
+            if s.last_clip.as_deref().is_some_and(|last| Path::new(last) == current || (last == path && !Path::new(last).exists())) {
+                s.last_clip = Some(saved_path);
                 let _ = settings::save(&s);
             }
-        }
-        Ok(saved)
+            Ok(())
+        });
+        drop(operation);
+        drop(_busy);
+        let _ = app.emit("clip-saved", json!({ "path": result.clip.path, "game": result.clip.game }));
+        Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1748,7 +1769,7 @@ fn main() {
             reveal_clip,
             rename_clip,
             delete_clip,
-            trim_clip,
+            export_clip_range,
             open_output_folder,
             pick_folder,
             is_ptt_key_supported,

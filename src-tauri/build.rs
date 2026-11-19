@@ -22,7 +22,7 @@ fn main() {
             "reveal_clip",
             "rename_clip",
             "delete_clip",
-            "trim_clip",
+            "export_clip_range",
             "open_output_folder",
             "pick_folder",
             "is_ptt_key_supported",

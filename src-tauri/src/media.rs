@@ -14,6 +14,7 @@ const PLAYBACK_PREFIX: &str = "playback:";
 struct PlayingFile {
     file: Mutex<File>,
     opened_link: Option<PathBuf>,
+    link_handle: Option<File>,
 }
 impl tauri::Resource for PlayingFile {}
 
@@ -24,9 +25,10 @@ impl Playback {
     pub fn start(&self, root: &Path, path: &Path) -> Result<String, String> {
         let entry = crate::clips::checked_entry(root, path)?;
         let opened_link = entry.path.is_symlink().then(|| root.join(entry.relative));
+        let link_handle = opened_link.as_deref().map(open_link).transpose().map_err(|e| e.to_string())?;
         // Rust's Windows File::open shares READ | WRITE | DELETE (the latter allows renaming).
         let file = File::open(entry.target).map_err(|e| e.to_string())?;
-        let id = self.0.lock().unwrap().add(PlayingFile { file: Mutex::new(file), opened_link });
+        let id = self.0.lock().unwrap().add(PlayingFile { file: Mutex::new(file), opened_link, link_handle });
         Ok(format!("{PLAYBACK_PREFIX}{id}"))
     }
 
@@ -58,9 +60,87 @@ impl Playback {
         }
     }
 
+    /// Retain the selected file and directory entry while an export outlives its player.
+    pub fn export_source(&self, root: &Path, token: &str, gallery_path: &Path) -> Result<ExportSource, String> {
+        self.resolve(root, token, Some(gallery_path))?;
+        let source = ExportSource(self.file(token)?);
+        source.location(root)?;
+        Ok(source)
+    }
+
     pub fn clear(&self) {
         *self.0.lock().unwrap() = tauri::ResourceTable::default();
     }
+}
+
+#[derive(Clone)]
+pub struct ExportSource(std::sync::Arc<PlayingFile>);
+
+impl ExportSource {
+    pub fn location(&self, root: &Path) -> Result<PathBuf, String> {
+        let file = self.0.file.lock().unwrap();
+        let target = scoped_handle_path(root, &file)?;
+        let selected = if let Some(link) = &self.0.link_handle {
+            let path = scoped_handle_path(root, link)?;
+            let current_link = open_link(&path).map_err(|e| e.to_string())?;
+            if !same_file(link, &current_link).map_err(|e| e.to_string())? {
+                return Err(crate::i18n::t("error.clipNotFound"));
+            }
+            path
+        } else { target };
+        let entry = crate::clips::checked_entry(root, &selected)?;
+        let current = File::open(&entry.target).map_err(|e| e.to_string())?;
+        if !same_file(&file, &current).map_err(|e| e.to_string())? {
+            return Err(crate::i18n::t("error.clipNotFound"));
+        }
+        Ok(root.join(entry.relative))
+    }
+
+    /// A newly opened file has its own seek offset. Duplicating the player handle
+    /// instead would make FFmpeg and the webview race on their shared cursor.
+    pub fn reader(&self, root: &Path) -> Result<File, String> {
+        let file = self.0.file.lock().unwrap();
+        let path = scoped_handle_path(root, &file)?;
+        let reader = File::open(path).map_err(|e| e.to_string())?;
+        if !same_file(&file, &reader).map_err(|e| e.to_string())? {
+            return Err(crate::i18n::t("error.clipNotFound"));
+        }
+        Ok(reader)
+    }
+}
+
+#[cfg(windows)]
+fn open_link(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+    File::options().read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path)
+}
+
+#[cfg(target_os = "linux")]
+fn open_link(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    File::options().read(true).custom_flags(libc::O_PATH | libc::O_NOFOLLOW).open(path)
+}
+
+#[cfg(windows)]
+fn same_file(a: &File, b: &File) -> io::Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
+    let identity = |f: &File| unsafe {
+        let mut info = std::mem::zeroed();
+        if GetFileInformationByHandle(f.as_raw_handle(), &mut info) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow))
+    };
+    Ok(identity(a)? == identity(b)?)
+}
+
+#[cfg(target_os = "linux")]
+fn same_file(a: &File, b: &File) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let (a, b) = (a.metadata()?, b.metadata()?);
+    Ok((a.dev(), a.ino()) == (b.dev(), b.ino()))
 }
 
 #[cfg(windows)]

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Move playback controls below the video and preview frames by hovering over the timeline. Adjust playback from 0.1× to 5×, skip five seconds, or loop a selected range.
+- Save a frame-accurate selection as a sibling MP4. The optional trash checkbox recycles the original after the new clip has been saved.
+
 ## 0.10.4 – 2026-11-19
 
 - Handle Space and Escape in the player right after it opens or changes state, instead of occasionally ignoring the key press.

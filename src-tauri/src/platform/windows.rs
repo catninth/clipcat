@@ -26,7 +26,8 @@ use windows_sys::Win32::System::LibraryLoader::{AddDllDirectory, SetDllDirectory
 use windows_sys::Win32::System::SystemInformation::{GetLocalTime, GetTickCount};
 use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO};
-use windows_sys::Win32::UI::Shell::{SHFileOperationW, SHFILEOPSTRUCTW};
+#[path = "recycle_windows.rs"]
+mod recycle_windows;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
     GetWindowThreadProcessId, IsZoomed, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, MB_ICONASTERISK,
@@ -40,11 +41,6 @@ const DISPLAY_DEVICE_ACTIVE: u32 = 0x1;
 const DISPLAY_DEVICE_MIRRORING_DRIVER: u32 = 0x8;
 const EDD_GET_DEVICE_INTERFACE_NAME: u32 = 0x1;
 const ENUM_CURRENT_SETTINGS: u32 = 0xFFFF_FFFF;
-const FO_DELETE: u32 = 0x3;
-const FOF_SILENT: u16 = 0x4;
-const FOF_NOCONFIRMATION: u16 = 0x10;
-const FOF_ALLOWUNDO: u16 = 0x40;
-const FOF_NOERRORUI: u16 = 0x400;
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "ClipCat";
@@ -533,7 +529,7 @@ fn hide(hwnd: HWND) {
 }
 
 fn recycle_source(path: &str) -> Vec<u16> {
-    // canonicalize() adds a verbatim prefix that SHFileOperationW rejects.
+    // canonicalize() adds a verbatim prefix that the Windows Shell rejects.
     // Keep UNC paths absolute when converting them back to Shell syntax.
     let path = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{unc}")
@@ -558,19 +554,14 @@ pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// Move to the recycle bin (recoverable deletion).
 pub fn recycle(path: &str) -> bool {
+    recycle_if(path, || true)
+}
+
+pub fn recycle_if(path: &str, still_selected: impl Fn() -> bool + Send + 'static) -> bool {
     let from = recycle_source(path);
-    unsafe {
-        let mut op: SHFILEOPSTRUCTW = zeroed();
-        op.wFunc = FO_DELETE as _;
-        op.pFrom = from.as_ptr();
-        op.fFlags = (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI) as _;
-        let result = SHFileOperationW(&mut op);
-        if result != 0 || op.fAnyOperationsAborted != 0 {
-            logfile::write(&format!("Recycle failed: code={result:#x}, aborted={}", op.fAnyOperationsAborted));
-            return false;
-        }
-        true
-    }
+    // Shell file operations need an STA, independent of the calling Tauri thread.
+    std::thread::spawn(move || recycle_windows::recycle(&from, still_selected))
+        .join().is_ok_and(|result| result.inspect_err(|e| logfile::write(&format!("Recycle failed: {e}"))).unwrap_or(false))
 }
 
 pub fn beep(error: bool) {
@@ -683,6 +674,15 @@ mod recycle_tests {
         let checked = crate::clips::checked_path(dir.path(), &clip).unwrap();
         assert!(super::recycle(&checked.to_string_lossy()));
         assert!(!clip.exists());
+    }
+
+    #[test]
+    fn refuses_the_shell_operation_if_the_selected_file_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let clip = dir.path().join("replacement.mp4");
+        std::fs::write(&clip, b"replacement").unwrap();
+        assert!(!super::recycle_if(&clip.to_string_lossy(), || false));
+        assert_eq!(std::fs::read(clip).unwrap(), b"replacement");
     }
 }
 

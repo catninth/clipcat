@@ -29,7 +29,7 @@
     "allow-reveal-clip",
     "allow-rename-clip",
     "allow-delete-clip",
-    "allow-trim-clip",
+    "allow-export-clip-range",
     "allow-open-output-folder",
     "allow-pick-folder",
     "allow-is-ptt-key-supported",

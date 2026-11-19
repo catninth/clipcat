@@ -98,8 +98,13 @@ Screenshots show the English UI with sample clips and simulated capture state. S
   field again to reverse the order. The [player](docs/gallery/player/playback.png) arrows
   follow that order across pages. Use **Rename** to change the filename without restarting
   playback. You can also rename the playing file in Windows Explorer and keep watching.
-- **Trim clips without losing quality.** Drag the left and right handles in the player,
-  then save a new clip or replace the original.
+- **Review a moment.** Hover over the timeline for a frame preview. The controls sit
+  below the picture, including in full screen. Adjust playback from 0.1× to 5×.
+- **Keep a highlight.** Choose **Select range**, set the start and end, and use
+  **Loop selection** to review the cut. **Save selection** writes a frame-accurate
+  MP4 next to the source. Select **Move original clip to trash** to recycle the
+  source after the new file has been saved. On Linux, range export requires a
+  system FFmpeg build with the libx264 and AAC encoders.
 
 ## FAQ
 

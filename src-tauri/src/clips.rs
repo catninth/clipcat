@@ -18,7 +18,7 @@ pub struct Clip {
 }
 
 impl Clip {
-    fn from_metadata(path: &Path, game: &str, meta: &Metadata) -> Self {
+    pub(crate) fn from_metadata(path: &Path, game: &str, meta: &Metadata) -> Self {
         let seconds = |time: SystemTime| time.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let modified = meta.modified().map(seconds).unwrap_or(0);
         Self {

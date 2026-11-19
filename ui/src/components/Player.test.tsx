@@ -9,7 +9,7 @@ vi.mock("../lib/tauri", () => ({ convertFileSrc: (token: string) => "/" + token,
 
 const clip = { path: "C:/Clips/Game/clip.mp4", name: "clip.mp4", game: "Game", size: 1024, created: 1_700_000_000, modified: 1_700_000_000 };
 const renamed = { ...clip, name: "Final.round.mp4", path: "C:/Clips/Game/Final.round.mp4" };
-const props = { clip, playbackKey: 1, onClose: vi.fn(), onDelete: vi.fn(), onRenamed: vi.fn(), onTrimmed: vi.fn() };
+const props = { clip, playbackKey: 1, onClose: vi.fn(), onDelete: vi.fn(), onRenamed: vi.fn(), onExported: vi.fn() };
 const token = "playback:1";
 const button = (key: keyof typeof en) => screen.getByRole("button", { name: en[key] });
 
@@ -121,7 +121,7 @@ async function renderTrimming(overrides: Partial<typeof props> = {}) {
 
 // Leave the whole-clip selection, which cannot be saved
 function moveStartHandle() {
-  fireEvent.keyDown(screen.getByRole("slider", { name: en["player.trimStart"] }), { key: "ArrowRight" });
+  fireEvent.keyDown(screen.getByRole("slider", { name: en["player.rangeStart"] }), { key: "ArrowRight" });
 }
 
 it("offers trimming only once the duration is known", async () => {
@@ -135,7 +135,6 @@ it("offers trimming only once the duration is known", async () => {
 it("cannot save the whole clip", async () => {
   await renderTrimming();
   expect(button("player.trimSaveCopy")).toHaveProperty("disabled", true);
-  expect(button("player.trimReplace")).toHaveProperty("disabled", true);
   moveStartHandle();
   expect(button("player.trimSaveCopy")).toHaveProperty("disabled", false);
 });
@@ -143,63 +142,90 @@ it("cannot save the whole clip", async () => {
 it("moves either handle to the playhead", async () => {
   const video = await renderTrimming();
   Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 4 });
-  await waitFor(() => expect(screen.getByText("00:04 / 00:13")).toBeTruthy());
+  fireEvent.timeUpdate(video);
   fireEvent.click(button("player.trimSetStart"));
-  expect(screen.getByRole("slider", { name: en["player.trimStart"] }).getAttribute("aria-valuenow")).toBe("4");
+  expect(screen.getByRole("slider", { name: en["player.rangeStart"] }).getAttribute("aria-valuenow")).toBe("4");
 
   video.currentTime = 9;
-  await waitFor(() => expect(screen.getByText("00:09 / 00:13")).toBeTruthy());
+  fireEvent.timeUpdate(video);
   fireEvent.click(button("player.trimSetEnd"));
-  expect(screen.getByRole("slider", { name: en["player.trimEnd"] }).getAttribute("aria-valuenow")).toBe("9");
+  expect(screen.getByRole("slider", { name: en["player.rangeEnd"] }).getAttribute("aria-valuenow")).toBe("9");
 });
 
-it("disables a snap that would leave less than a second", async () => {
+it("allows saving a subsecond range", async () => {
   const video = await renderTrimming();
-  Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 0.5 });
-  await waitFor(() => expect(button("player.trimSetEnd")).toHaveProperty("disabled", true));
-  expect(button("player.trimSetStart")).toHaveProperty("disabled", false);
+  video.currentTime = 0.5;
+  fireEvent.timeUpdate(video);
+  fireEvent.click(button("player.trimSetEnd"));
+  expect(button("player.trimSaveCopy")).toHaveProperty("disabled", false);
 });
 
-it("saves a copy of the current file location, then closes", async () => {
+it.each([false, true])("sends the precise range and requested recycle flag (%s) with the open session", async trashOriginal => {
   const video = await renderTrimming();
-  vi.mocked(invoke).mockResolvedValueOnce(renamed.path).mockResolvedValueOnce(renamed.path);
+  const checkbox = screen.getByRole("checkbox", { name: en["player.trimTrash"] });
+  expect(checkbox).toHaveProperty("checked", false);
+  if (trashOriginal) fireEvent.click(checkbox);
+  const result = { clip: renamed, originalTrashed: trashOriginal, trashError: null };
+  vi.mocked(invoke).mockResolvedValueOnce(result);
   moveStartHandle();
   fireEvent.click(button("player.trimSaveCopy"));
-  await waitFor(() => expect(props.onClose).toHaveBeenCalledOnce());
-  expect(invoke).toHaveBeenCalledWith("trim_clip", { path: renamed.path, start: 0.1, end: 13, replace: false });
-  expect(props.onTrimmed).toHaveBeenCalledOnce();
-  expect(video.hasAttribute("src")).toBe(false);
+  await waitFor(() => expect(props.onExported).toHaveBeenCalledWith(result));
+  expect(invoke).toHaveBeenCalledWith("export_clip_range", { token, path: clip.path, startSeconds: 0.1, endSeconds: 13, trashOriginal });
+  expect(screen.getByRole("status").textContent).toContain(renamed.name);
+  expect(props.onClose).not.toHaveBeenCalled();
+  expect(video.getAttribute("src")).toBe("/" + token);
 });
 
-it("requires confirmation before replacing the original", async () => {
+it("reports a saved trim and recycle failure as a partial success", async () => {
   await renderTrimming();
+  fireEvent.click(screen.getByRole("checkbox"));
+  const result = { clip: renamed, originalTrashed: false, trashError: "locked file" };
+  vi.mocked(invoke).mockResolvedValueOnce(result);
   moveStartHandle();
-  fireEvent.click(button("player.trimReplace"));
-  expect(invoke).not.toHaveBeenCalledWith("trim_clip", expect.anything());
-  fireEvent.click(button("player.trimReplaceConfirm"));
-  await waitFor(() => expect(props.onClose).toHaveBeenCalledOnce());
-  expect(invoke).toHaveBeenCalledWith("trim_clip", { path: clip.path, start: 0.1, end: 13, replace: true });
+  fireEvent.click(button("player.trimSaveCopy"));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain(renamed.name);
+  expect(alert.textContent).toContain(result.trashError);
+  expect(props.onExported).toHaveBeenCalledWith(result);
 });
 
-it("keeps playing the clip and the selection after a failed trim", async () => {
+it("shows a late export failure in the gallery and lets the user dismiss it", async () => {
+  const { container, rerender } = render(<Player {...props} />);
+  const video = container.querySelector("video")!;
+  await waitFor(() => expect(video.hasAttribute("src")).toBe(true));
+  Object.defineProperty(video, "duration", { configurable: true, value: 13 });
+  fireEvent.durationChange(video);
+  fireEvent.click(button("player.trim"));
+  moveStartHandle();
+  let fail!: (reason: string) => void;
+  vi.mocked(invoke).mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+  fireEvent.click(button("player.trimSaveCopy"));
+  rerender(<Player {...props} clip={null} />);
+  await act(async () => { fail("disk full"); });
+  expect(screen.getByRole("status").textContent).toContain("clip.mp4 · disk full");
+  fireEvent.click(button("player.dismissStatus"));
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+it("keeps the clip, selection and file actions consistent after a failed export", async () => {
   const video = await renderTrimming();
-  vi.mocked(invoke).mockResolvedValueOnce(clip.path).mockRejectedValueOnce("no space");
+  vi.mocked(invoke).mockRejectedValueOnce("no space");
   moveStartHandle();
   fireEvent.click(button("player.trimSaveCopy"));
   expect((await screen.findByRole("alert")).textContent).toBe("no space");
   expect(video.getAttribute("src")).toBe("/" + token);
   expect(props.onClose).not.toHaveBeenCalled();
-  expect(props.onTrimmed).not.toHaveBeenCalled();
-  expect(screen.getByRole("slider", { name: en["player.trimStart"] }).getAttribute("aria-valuenow")).toBe("0.1");
+  expect(props.onExported).not.toHaveBeenCalled();
+  expect(screen.getByRole("slider", { name: en["player.rangeStart"] }).getAttribute("aria-valuenow")).toBe("0.1");
 });
 
 it("plays and pauses from the icon button", async () => {
   const video = await renderTrimming();
   vi.mocked(video.play).mockClear();
-  fireEvent.click(button("player.trimPlay"));
+  fireEvent.click(button("player.play"));
   expect(video.play).toHaveBeenCalledOnce();
   fireEvent.play(video);
-  expect(button("player.trimPause")).toBeTruthy();
+  expect(button("player.pause")).toBeTruthy();
 });
 
 it("toggles playback with Space, in and out of trimming", async () => {
@@ -254,8 +280,86 @@ it("ignores Space when the player is closed", () => {
 it("leaves trimming on Escape without closing the player", async () => {
   await renderTrimming();
   fireEvent.keyDown(document, { key: "Escape" });
-  expect(screen.queryByRole("slider", { name: en["player.trimStart"] })).toBeNull();
+  expect(screen.queryByRole("slider", { name: en["player.rangeStart"] })).toBeNull();
   expect(props.onClose).not.toHaveBeenCalled();
   fireEvent.keyDown(document, { key: "Escape" });
   expect(props.onClose).toHaveBeenCalledOnce();
+});
+
+it("applies speed endpoints, resets to normal speed, and restores volume after muting", async () => {
+  const video = await renderReady();
+  const speed = screen.getByRole("slider", { name: en["player.speed"] });
+  fireEvent.change(speed, { target: { value: "0.1" } });
+  expect(video.playbackRate).toBe(0.1);
+  fireEvent.change(speed, { target: { value: "5" } });
+  expect(video.playbackRate).toBe(5);
+  fireEvent.click(button("player.resetSpeed"));
+  expect(video.playbackRate).toBe(1);
+  fireEvent.change(screen.getByRole("slider", { name: en["player.volume"] }), { target: { value: "45" } });
+  expect(video.volume).toBe(0.45);
+  fireEvent.click(button("player.mute"));
+  expect(video.muted).toBe(true);
+  fireEvent.click(button("player.unmute"));
+  expect(video.muted).toBe(false);
+  expect(video.volume).toBe(0.45);
+});
+
+it("jumps five seconds, clamps to clip bounds, and stops at the beginning", async () => {
+  const video = await renderReady();
+  Object.defineProperty(video, "duration", { configurable: true, value: 8 });
+  fireEvent.durationChange(video);
+  fireEvent.click(button("player.forwardFive"));
+  expect(video.currentTime).toBe(5);
+  fireEvent.keyDown(document, { key: "ArrowRight" });
+  expect(video.currentTime).toBe(8);
+  fireEvent.click(button("player.backFive"));
+  expect(video.currentTime).toBe(3);
+  fireEvent.click(button("player.stop"));
+  expect(video.currentTime).toBe(0);
+  expect(video.pause).toHaveBeenCalled();
+});
+
+it("loops the selected range independently of whole-clip repeat", async () => {
+  const video = await renderTrimming();
+  video.currentTime = 3;
+  fireEvent.timeUpdate(video);
+  fireEvent.click(button("player.trimSetStart"));
+  video.currentTime = 5;
+  fireEvent.timeUpdate(video);
+  fireEvent.click(button("player.trimSetEnd"));
+  fireEvent.click(button("player.repeat"));
+  expect(video.loop).toBe(true);
+  vi.mocked(video.play).mockClear();
+  fireEvent.click(button("player.trimLoop"));
+  expect(video.loop).toBe(false);
+  expect(video.play).toHaveBeenCalledOnce();
+  vi.spyOn(video, "paused", "get").mockReturnValue(false);
+  fireEvent.timeUpdate(video);
+  expect(video.currentTime).toBe(3);
+  fireEvent.click(button("player.trimLoop"));
+  video.currentTime = 6;
+  fireEvent.timeUpdate(video);
+  expect(video.currentTime).toBe(6);
+});
+
+it("requests fullscreen on the stable player shell and dismisses it before closing the dialog", async () => {
+  const video = await renderReady();
+  const shell = video.closest<HTMLElement>(".player-shell")!;
+  const request = vi.fn().mockResolvedValue(undefined);
+  const exit = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(shell, "requestFullscreen", { configurable: true, value: request });
+  Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exit });
+  try {
+    fireEvent.click(button("player.fullscreen"));
+    expect(request).toHaveBeenCalledOnce();
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, value: shell });
+    fireEvent(document, new Event("fullscreenchange"));
+    expect(button("player.exitFullscreen")).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(exit).toHaveBeenCalledOnce();
+    expect(props.onClose).not.toHaveBeenCalled();
+  } finally {
+    Reflect.deleteProperty(document, "fullscreenElement");
+    Reflect.deleteProperty(document, "exitFullscreen");
+  }
 });

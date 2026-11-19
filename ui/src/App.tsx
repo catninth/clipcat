@@ -5,7 +5,7 @@ import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { MicrophoneWarning } from "./components/MicrophoneWarning";
 import { invoke, listen } from "./lib/tauri";
-import type { Clip, Settings, Status, UpdateState, View } from "./lib/tauri";
+import type { Clip, Settings, Status, TrimResult, UpdateState, View } from "./lib/tauri";
 import { pruneThumbs, thumbsReady, tileKey } from "./lib/thumbs";
 import { loadLocale, useLocale } from "./lib/i18n";
 import { useGalleryOrder } from "./lib/galleryOrder";
@@ -20,12 +20,15 @@ export function App() {
   const [update, setUpdate] = useState<UpdateState | null>(null);
   const [clips, setClips] = useState<Clip[] | null>(null);
   const [gameFilter, setGameFilter] = useState("");
-  const [playing, setPlaying] = useState<Clip | null>(null);
-  const [playbackKey, setPlaybackKey] = useState(0);
+  const [{ clip: playing, key: playbackKey }, setPlayback] = useState<{ clip: Clip | null; key: number }>({ clip: null, key: 0 });
   const refreshId = useRef(0);
   const order = useGalleryOrder(clips ?? EMPTY_LIBRARY, gameFilter, !!playing);
   const { keepRenamedDuration } = order;
   const playingIndex = playing ? order.visible.findIndex(c => c.path === playing.path) : -1;
+  const closePlayer = useCallback(() => setPlayback(current => ({ ...current, clip: null })), []);
+  const openClip = useCallback((clip: Clip) => {
+    setPlayback(current => ({ clip, key: current.key + 1 }));
+  }, []);
 
   // Also delete stored thumbnails for clips that no longer exist
   useEffect(() => {
@@ -72,25 +75,19 @@ export function App() {
       listen<UpdateState>("update", (e) => setUpdate(e.payload)),
       listen("locale-changed", () => { void loadLocale(); }),
       // Stop playback when the window is hidden
-      listen("main-hidden", () => setPlaying(null)),
+      listen("main-hidden", closePlayer),
     ];
     return () => { alive = false; unlisten.forEach((p) => p.then((off) => off())); };
-  }, [loadClips]);
+  }, [loadClips, closePlayer]);
 
   // Refresh the gallery every time it opens
   useEffect(() => {
     if (view === "gallery") loadClips();
   }, [view, loadClips]);
 
-  const closePlayer = useCallback(() => setPlaying(null), []);
-  const openClip = useCallback((clip: Clip) => {
-    setPlaying(clip);
-    setPlaybackKey(key => key + 1);
-  }, []);
-
   const renamed = useCallback((previous: Clip, updated: Clip) => {
     keepRenamedDuration(previous, updated);
-    setPlaying(current => current?.path === previous.path ? updated : current);
+    setPlayback(current => current.clip?.path === previous.path ? { ...current, clip: updated } : current);
     setClips(list => {
       if (!list?.some(c => c.path === previous.path)) return list;
       return list.filter(c => c.path === previous.path || c.path !== updated.path)
@@ -98,6 +95,16 @@ export function App() {
     });
     void loadClips();
   }, [keepRenamedDuration, loadClips]);
+
+  const onExported = useCallback((result: TrimResult) => {
+    // The native clip-saved event refreshes the gallery after the optional recycle operation.
+    // Only replace the player if the user is still watching the exported source session.
+    if (result.originalTrashed) {
+      setPlayback(current => current.clip && current.key === playbackKey
+        ? { clip: result.clip, key: current.key + 1 }
+        : current);
+    }
+  }, [playbackKey]);
 
   const deleteClip = useCallback(async (clip: Clip) => {
     try {
@@ -121,10 +128,10 @@ export function App() {
           )}
         </main>
       </div>
-      <Player clip={playing} playbackKey={playbackKey} onClose={closePlayer} onDelete={deleteClip} onRenamed={renamed} onTrimmed={loadClips}
+      <Player clip={playing} playbackKey={playbackKey} onClose={closePlayer} onDelete={deleteClip} onRenamed={renamed} onExported={onExported}
         onPrevious={playingIndex > 0 ? () => openClip(order.visible[playingIndex - 1]) : undefined}
         onNext={playingIndex >= 0 && playingIndex + 1 < order.visible.length ? () => openClip(order.visible[playingIndex + 1]) : undefined} />
-      <MicrophoneWarning warning={status?.micWarning ?? null} onSettings={() => { setPlaying(null); setView("settings"); }} />
+      <MicrophoneWarning warning={status?.micWarning ?? null} onSettings={() => { closePlayer(); setView("settings"); }} />
     </>
   );
 }

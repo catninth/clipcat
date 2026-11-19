@@ -1,0 +1,131 @@
+.player-timeline {
+  position: relative;
+  isolation: isolate;
+  height: 32px;
+  width: 100%;
+  min-width: 0;
+  touch-action: none;
+}
+
+.timeline-rail,
+.timeline-rail i {
+  position: absolute;
+  border-radius: 99px;
+  pointer-events: none;
+}
+
+.timeline-rail {
+  inset: 50% 0 auto;
+  height: 5px;
+  transform: translateY(-50%);
+  background: var(--color-panel-3);
+}
+
+.timeline-buffer,
+.timeline-elapsed {
+  inset: 0 auto 0 0;
+}
+
+.timeline-buffer { background: var(--color-faint); }
+.timeline-elapsed { background: var(--color-accent); }
+
+.timeline-selection {
+  top: -3px;
+  height: 11px;
+  background: var(--color-accent-soft);
+  border-block: 1px solid var(--color-accent);
+}
+
+.timeline-thumb {
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  transform: translate(-50%, -50%);
+  background: var(--color-fg);
+  box-shadow: 0 0 0 2px var(--color-panel);
+}
+
+.timeline-seek {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.player-timeline:has(.timeline-seek:focus-visible) .timeline-rail {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 4px;
+}
+
+.timeline-marker {
+  position: absolute;
+  top: 0;
+  display: grid;
+  width: 26px;
+  height: 32px;
+  place-items: center;
+  color: var(--color-accent-ink);
+  cursor: ew-resize;
+  border-radius: 4px;
+}
+
+.timeline-marker-start { transform: translateX(-75%); }
+.timeline-marker-end { transform: translateX(-25%); }
+
+.timeline-marker span {
+  display: grid;
+  width: 16px;
+  height: 20px;
+  place-items: center;
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent-ink);
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.timeline-preview {
+  position: absolute;
+  bottom: calc(50% + 12px);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(160px, 100%);
+  gap: 3px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* WebKitGTK supplies canvas frames only while the decoder has an on-screen renderer. */
+.timeline-decoder {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2px;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.timeline-preview canvas {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  background: var(--color-canvas);
+  border: 1px solid rgb(255 255 255 / .55);
+  box-shadow: 0 3px 14px rgb(0 0 0 / .45);
+}
+
+.timeline-preview-time {
+  padding: 2px 7px;
+  border-radius: 4px;
+  color: var(--color-fg);
+  background: var(--color-canvas);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 600;
+}

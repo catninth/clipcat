@@ -7,8 +7,13 @@ use std::{
 };
 
 pub fn run(command: &mut Command, timeout: Duration, cancel: &AtomicBool) -> Result<(), String> {
+    run_with_input(command, Stdio::null(), timeout, cancel).map(|_| ())
+}
+
+pub fn run_with_input(command: &mut Command, input: Stdio, timeout: Duration, cancel: &AtomicBool) -> Result<String, String> {
+    if cancel.load(Ordering::SeqCst) { return Err("canceled".into()); }
     let mut child = command
-        .stdin(Stdio::null())
+        .stdin(input)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -48,7 +53,10 @@ pub fn run(command: &mut Command, timeout: Duration, cancel: &AtomicBool) -> Res
     }
     let _ = child.wait();
     let detail = reader.join().unwrap_or_default();
-    result.map_err(|error| format!("{error}: {}", detail.trim()))
+    match result {
+        Ok(()) => Ok(detail),
+        Err(error) => Err(format!("{error}: {}", detail.trim())),
+    }
 }
 
 #[cfg(test)]

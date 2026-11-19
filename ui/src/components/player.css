@@ -1,0 +1,196 @@
+.player-shell {
+  padding: clamp(12px, 3vw, 32px);
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+
+.player-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(1200px, 100%);
+  max-height: 100%;
+  min-height: 0;
+}
+
+.media-picture {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 12px 12px 0 0;
+  background: #000;
+}
+
+.media-picture video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+}
+
+.media-dock {
+  position: relative;
+  flex: none;
+  padding: 4px 14px 10px;
+  border: 1px solid var(--color-line-strong);
+  border-top: 0;
+  border-radius: 0 0 12px 12px;
+  background: var(--color-panel);
+}
+
+.media-controls,
+.media-group,
+.media-trim-row,
+.media-trash,
+.media-marker {
+  display: flex;
+  align-items: center;
+}
+
+.media-controls {
+  flex-wrap: wrap;
+  gap: 4px clamp(7px, 1.3vw, 18px);
+}
+
+.media-group {
+  flex: none;
+  gap: 4px;
+}
+
+.media-transport { gap: 2px; }
+.media-sound { margin-left: auto; }
+
+.media-time {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.media-time span,
+.media-length { color: var(--color-muted); }
+
+.media-key,
+.media-rate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 32px;
+  height: 34px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.media-key svg { width: 18px; height: 18px; }
+.media-key:enabled:hover,
+.media-rate:enabled:hover,
+.media-marker:enabled:hover { background: var(--color-panel-3); }
+
+.media-key[aria-pressed=true] {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.media-key.media-primary {
+  min-width: 38px;
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+}
+
+.media-key.media-primary:enabled:hover { background: var(--color-accent-hover); }
+.media-key:disabled, .media-rate:disabled, .media-marker:disabled { opacity: .4; }
+.media-rate { min-width: 40px; padding: 0 4px; }
+
+.media-range {
+  width: clamp(58px, 7vw, 102px);
+  height: 28px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.media-speed .media-range { width: clamp(75px, 9vw, 128px); }
+
+.media-trim {
+  margin-top: 8px;
+  border-top: 1px solid var(--color-line-strong);
+  padding-top: 8px;
+}
+
+.media-trim-row { flex-wrap: wrap; gap: 6px 10px; }
+.media-trim-actions { margin-top: 8px; }
+.media-marker {
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--color-panel-2);
+  font-size: 13px;
+}
+
+.media-marker b { color: var(--color-accent); }
+.media-length, .media-trash { font-size: 13px; }
+.media-trash { margin-right: auto; gap: 8px; min-height: 32px; cursor: pointer; }
+.media-trash input { width: 16px; height: 16px; accent-color: var(--color-accent); }
+.player-files { flex: none; margin-top: 12px; }
+.player-message,
+.player-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-wrap: anywhere;
+}
+.player-message { flex: none; margin: 6px 0 0; }
+.player-notice {
+  position: fixed;
+  z-index: 11;
+  inset: auto 16px 16px auto;
+  max-width: min(480px, calc(100% - 32px));
+  padding: 8px 12px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 8px;
+  background: var(--color-panel);
+  box-shadow: 0 3px 14px #0005;
+}
+.player-message button,
+.player-notice button {
+  min-width: 28px;
+  min-height: 28px;
+  margin-left: auto;
+  font-size: 18px;
+}
+
+.player-shell:fullscreen {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: #000;
+}
+
+.player-shell:fullscreen .player-dialog {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+}
+
+.player-shell:fullscreen .media-picture { flex: 1; border-radius: 0; }
+.player-shell:fullscreen .media-dock { border-radius: 0; }
+.player-shell:fullscreen .player-files { display: none; }
+.player-shell:fullscreen .player-message { padding: 2px 14px 6px; }
+
+@media (max-width: 800px) {
+  .player-shell { padding: 10px; }
+  .media-dock { padding-inline: 8px; }
+  .media-controls { column-gap: 5px; }
+  .media-range { width: 54px; }
+  .media-speed .media-range { width: 72px; }
+}
+
+@media (max-width: 640px) {
+  .media-sound { margin-left: 0; }
+  .media-controls { gap: 4px 8px; }
+  .media-time { flex: 1; text-align: right; }
+  .media-modes { margin-left: auto; }
+}

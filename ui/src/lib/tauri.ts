@@ -74,6 +74,12 @@ export interface Clip {
   modified: number;
 }
 
+export interface TrimResult {
+  clip: Clip;
+  originalTrashed: boolean;
+  trashError: string | null;
+}
+
 export interface Mic {
   id: string;
   name: string;

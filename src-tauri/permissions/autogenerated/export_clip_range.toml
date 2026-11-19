@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-clip-range"
+description = "Enables the export_clip_range command without any pre-configured scope."
+commands.allow = ["export_clip_range"]
+
+[[permission]]
+identifier = "deny-export-clip-range"
+description = "Denies the export_clip_range command without any pre-configured scope."
+commands.deny = ["export_clip_range"]

@@ -155,12 +155,13 @@ pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// Move to trash (recoverable deletion) through GLib
 pub fn recycle(path: &str) -> bool {
-    Command::new("gio")
-        .args(["trash", "--"])
-        .arg(path)
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    recycle_if(path, || true)
+}
+
+pub fn recycle_if(path: &str, still_selected: impl Fn() -> bool) -> bool {
+    use gio::prelude::FileExt;
+    let item = gio::File::for_path(path);
+    still_selected() && item.trash(None::<&gio::Cancellable>).is_ok()
 }
 
 /// Linux has no universal system sound; notifications are silent.
