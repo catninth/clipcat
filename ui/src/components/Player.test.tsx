@@ -139,6 +139,21 @@ it("cannot save the whole clip", async () => {
   expect(button("player.trimSaveCopy")).toHaveProperty("disabled", false);
 });
 
+it("turns off range looping when the handles span the whole clip", async () => {
+  const video = await renderTrimming();
+  const loop = button("player.trimLoop");
+  expect(loop).toHaveProperty("disabled", true);
+  moveStartHandle();
+  fireEvent.click(loop);
+  expect(loop.getAttribute("aria-pressed")).toBe("true");
+  fireEvent.keyDown(screen.getByRole("slider", { name: en["player.rangeStart"] }), { key: "Home" });
+  expect(loop).toHaveProperty("disabled", true);
+  expect(loop.getAttribute("aria-pressed")).toBe("false");
+  vi.mocked(video.play).mockClear();
+  fireEvent.ended(video);
+  expect(video.play).not.toHaveBeenCalled();
+});
+
 it("moves either handle to the playhead", async () => {
   const video = await renderTrimming();
   Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 4 });
@@ -219,13 +234,67 @@ it("keeps the clip, selection and file actions consistent after a failed export"
   expect(screen.getByRole("slider", { name: en["player.rangeStart"] }).getAttribute("aria-valuenow")).toBe("0.1");
 });
 
-it("plays and pauses from the icon button", async () => {
-  const video = await renderTrimming();
+it("uses one button for play and stop and rewinds on stop", async () => {
+  const video = await renderReady();
+  Object.defineProperty(video, "duration", { configurable: true, value: 13 });
+  fireEvent.durationChange(video);
+  const paused = vi.spyOn(video, "paused", "get").mockReturnValue(true);
+  const transport = button("player.play");
+  const playIcon = transport.querySelector("svg")!.innerHTML;
+  expect(screen.queryByRole("button", { name: en["player.stop"] })).toBeNull();
   vi.mocked(video.play).mockClear();
-  fireEvent.click(button("player.play"));
+  fireEvent.click(transport);
   expect(video.play).toHaveBeenCalledOnce();
+  paused.mockReturnValue(false);
   fireEvent.play(video);
-  expect(button("player.pause")).toBeTruthy();
+  expect(button("player.stop")).toBe(transport);
+  expect(screen.queryByRole("button", { name: en["player.play"] })).toBeNull();
+  expect(transport.querySelector("svg")!.innerHTML).not.toBe(playIcon);
+
+  video.currentTime = 7;
+  fireEvent.click(transport);
+  expect(video.pause).toHaveBeenCalledOnce();
+  expect(video.currentTime).toBe(0);
+  paused.mockReturnValue(true);
+  fireEvent.pause(video);
+  expect(button("player.play")).toBe(transport);
+  expect(transport.querySelector("svg")!.innerHTML).toBe(playIcon);
+  video.currentTime = 4;
+  fireEvent.click(transport);
+  expect(video.play).toHaveBeenCalledTimes(2);
+  expect(video.currentTime).toBe(4);
+  fireEvent.play(video);
+  video.currentTime = video.duration;
+  vi.spyOn(video, "ended", "get").mockReturnValue(true);
+  fireEvent.ended(video);
+  expect(button("player.play")).toBe(transport);
+  fireEvent.click(transport);
+  expect(video.currentTime).toBe(0);
+});
+
+it("puts the available clip navigation buttons beside the picture", async () => {
+  const onPrevious = vi.fn();
+  const onNext = vi.fn();
+  const { container, rerender } = render(<Player {...props} onPrevious={onPrevious} onNext={onNext} />);
+  const video = container.querySelector("video")!;
+  await waitFor(() => expect(video.hasAttribute("src")).toBe(true));
+  const picture = video.closest(".media-picture")!;
+  expect(picture.contains(button("player.previous"))).toBe(true);
+  expect(picture.contains(button("player.next"))).toBe(true);
+  vi.mocked(video.play).mockClear();
+  fireEvent.click(button("player.previous"));
+  fireEvent.click(button("player.next"));
+  expect(onPrevious).toHaveBeenCalledOnce();
+  expect(onNext).toHaveBeenCalledOnce();
+  expect(video.play).not.toHaveBeenCalled();
+  expect(video.pause).not.toHaveBeenCalled();
+
+  rerender(<Player {...props} onNext={onNext} />);
+  expect(screen.queryByRole("button", { name: en["player.previous"] })).toBeNull();
+  expect(picture.contains(button("player.next"))).toBe(true);
+  rerender(<Player {...props} onPrevious={onPrevious} />);
+  expect(screen.queryByRole("button", { name: en["player.next"] })).toBeNull();
+  expect(picture.contains(button("player.previous"))).toBe(true);
 });
 
 it("toggles playback with Space, in and out of trimming", async () => {
@@ -237,8 +306,10 @@ it("toggles playback with Space, in and out of trimming", async () => {
   expect(video.play).toHaveBeenCalledOnce();
 
   paused.mockReturnValue(false);
+  video.currentTime = 4;
   fireEvent.keyDown(document, { key: " " });
   expect(video.pause).toHaveBeenCalledOnce();
+  expect(video.currentTime).toBe(4);
 
   fireEvent.keyDown(document, { key: " ", repeat: true });
   expect(video.pause).toHaveBeenCalledOnce();
@@ -304,7 +375,7 @@ it("applies speed endpoints, resets to normal speed, and restores volume after m
   expect(video.volume).toBe(0.45);
 });
 
-it("jumps five seconds, clamps to clip bounds, and stops at the beginning", async () => {
+it("jumps five seconds and clamps to both clip bounds", async () => {
   const video = await renderReady();
   Object.defineProperty(video, "duration", { configurable: true, value: 8 });
   fireEvent.durationChange(video);
@@ -314,21 +385,19 @@ it("jumps five seconds, clamps to clip bounds, and stops at the beginning", asyn
   expect(video.currentTime).toBe(8);
   fireEvent.click(button("player.backFive"));
   expect(video.currentTime).toBe(3);
-  fireEvent.click(button("player.stop"));
+  fireEvent.keyDown(document, { key: "ArrowLeft" });
   expect(video.currentTime).toBe(0);
-  expect(video.pause).toHaveBeenCalled();
 });
 
-it("loops the selected range independently of whole-clip repeat", async () => {
+it("loops only the selected range and leaves the clip stopped at the end otherwise", async () => {
   const video = await renderTrimming();
+  expect(screen.queryByRole("button", { name: "Loop clip" })).toBeNull();
   video.currentTime = 3;
   fireEvent.timeUpdate(video);
   fireEvent.click(button("player.trimSetStart"));
   video.currentTime = 5;
   fireEvent.timeUpdate(video);
   fireEvent.click(button("player.trimSetEnd"));
-  fireEvent.click(button("player.repeat"));
-  expect(video.loop).toBe(true);
   vi.mocked(video.play).mockClear();
   fireEvent.click(button("player.trimLoop"));
   expect(video.loop).toBe(false);
@@ -340,6 +409,11 @@ it("loops the selected range independently of whole-clip repeat", async () => {
   video.currentTime = 6;
   fireEvent.timeUpdate(video);
   expect(video.currentTime).toBe(6);
+  vi.mocked(video.play).mockClear();
+  video.currentTime = video.duration;
+  fireEvent.ended(video);
+  expect(video.currentTime).toBe(video.duration);
+  expect(video.play).not.toHaveBeenCalled();
 });
 
 it("requests fullscreen on the stable player shell and dismisses it before closing the dialog", async () => {

@@ -12,6 +12,7 @@
 }
 
 .media-picture {
+  position: relative;
   display: grid;
   place-items: center;
   min-height: 0;
@@ -28,6 +29,25 @@
   min-height: 0;
   object-fit: contain;
 }
+
+.clip-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: white;
+  background: rgb(0 0 0 / .65);
+  border: 1px solid rgb(255 255 255 / .2);
+  box-shadow: 0 2px 6px #0004;
+}
+
+.clip-arrow svg { width: 20px; height: 20px; }
+.clip-arrow:enabled:hover { background: rgb(0 0 0 / .85); }
+.clip-arrow:disabled { opacity: .4; }
 
 .media-dock {
   position: relative;

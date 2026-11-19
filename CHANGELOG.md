@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Use one button to play or stop a clip. Stop returns to the beginning. Click the video or press Space to pause and resume in place.
+- Switch clips with the arrows halfway down the left and right edges of the video, including in full screen.
+- Loop a selected A–B range. The whole-clip repeat control has been removed.
+
 ## 0.11.0 – 2026-11-19
 
 - Move playback controls below the video and preview frames by hovering over the timeline. Adjust playback from 0.1× to 5×, skip five seconds, or loop a selected range.

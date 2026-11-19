@@ -95,11 +95,12 @@ Screenshots show the English UI with sample clips and simulated capture state. S
   [Buffer settings](docs/gallery/settings/disk-buffer.png).
 - **Find and replay local clips.** Filter the [gallery](docs/gallery/gallery/overview.png) by
   application and sort by filename, length, creation time, or size. Click the active sort
-  field again to reverse the order. The [player](docs/gallery/player/playback.png) arrows
+  field again to reverse the order. The arrows on either side of the [video](docs/gallery/player/playback.png)
   follow that order across pages. Use **Rename** to change the filename without restarting
   playback. You can also rename the playing file in Windows Explorer and keep watching.
-- **Review a moment.** Hover over the timeline for a frame preview. The controls sit
-  below the picture, including in full screen. Adjust playback from 0.1× to 5×.
+- **Review a moment.** The playback button below the video changes to **Stop** while
+  playing. Stopping returns to the beginning. Click the video or press Space to pause and resume in place.
+  Hover over the timeline for a frame preview. Adjust playback from 0.1× to 5×.
 - **Keep a highlight.** Choose **Select range**, set the start and end, and use
   **Loop selection** to review the cut. **Save selection** writes a frame-accurate
   MP4 next to the source. Select **Move original clip to trash** to recycle the

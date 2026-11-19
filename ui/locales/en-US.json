@@ -57,7 +57,6 @@
     "player.resetSpeed": "Reset speed to 1×",
     "player.fullscreen": "Full screen",
     "player.exitFullscreen": "Exit full screen",
-    "player.repeat": "Loop clip",
     "player.timeline": "Playback position",
     "player.rangeStart": "Loop start (A)",
     "player.rangeEnd": "Loop end (B)",

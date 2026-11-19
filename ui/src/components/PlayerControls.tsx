@@ -24,10 +24,7 @@ interface Props {
 
 const icons = {
   play: <path fill="currentColor" stroke="none" d="M6 3.7a.9.9 0 0 1 1.4-.75l14 8.3a.9.9 0 0 1 0 1.5l-14 8.3A.9.9 0 0 1 6 20.3z" />,
-  pause: <path fill="currentColor" stroke="none" d="M5 4h5v16H5zm9 0h5v16h-5z" />,
   stop: <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none" />,
-  previous: <path d="M5 5v14m13-14-9 7 9 7z" />,
-  next: <path d="M19 5v14M6 5l9 7-9 7z" />,
   back: <><path d="M4 10a8 8 0 1 1 .6 7M3.5 4.5V10H9" /><path d="M14.4 9.2h-3.7l-.4 3.2c2.7-1.1 4.7-.5 4.2 1.7-.3 1.6-2.5 2.4-4.5 1.2" strokeWidth="1.5" /></>,
   forward: <><path d="M20 10a8 8 0 1 0-.6 7m1.1-12.5V10H15" /><path d="M14 9.2h-3.7l-.4 3.2c2.7-1.1 4.7-.5 4.2 1.7-.3 1.6-2.5 2.4-4.5 1.2" strokeWidth="1.5" /></>,
   volume: <><path d="M3 9h4l5-4v14l-5-4H3z" /><path d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" /></>,
@@ -50,6 +47,19 @@ function Control({ icon, label, title = label, pressed, disabled, onClick, child
   </button>;
 }
 
+function ClipArrow({ previous = false, disabled, onClick }: {
+  previous?: boolean; disabled: boolean; onClick: () => void;
+}) {
+  const label = t(previous ? "player.previous" : "player.next");
+  return <button type="button" className={`clip-arrow ${previous ? "left-3" : "right-3"}`}
+    aria-label={label} title={label} disabled={disabled} onClick={onClick}>
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+      strokeLinecap="round" strokeLinejoin="round">
+      <path d={previous ? "m14.5 5-7 7 7 7" : "m9.5 5 7 7-7 7"} />
+    </svg>
+  </button>;
+}
+
 export function PlayerControls({ video, dialog, src, open, fullscreen, busy, editing, exporting,
   onFullscreen, onExport, onError, onPrevious, onNext }: Props) {
   const [duration, setDuration] = useState(0);
@@ -59,7 +69,6 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
   const [speed, setSpeed] = useState(1);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
-  const [repeat, setRepeat] = useState(false);
   const [range, setRange] = useState<{ start: number; end: number }>();
   const [loopRange, setLoopRange] = useState(false);
   const [trash, setTrash] = useState(false);
@@ -68,8 +77,10 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
   const trimButton = useRef<HTMLButtonElement>(null);
   const restoreTrimFocus = useRef(false);
   const ready = !!src && duration > 0;
-  const validRange = !!range && range.end > range.start;
-  const cutChosen = validRange && (range.start > 0 || range.end < duration);
+  function isPartialRange(start: number, end: number) {
+    return end > start && (start > 0 || end < duration);
+  }
+  const hasSelection = !!range && isPartialRange(range.start, range.end);
 
   function syncTime(player: HTMLVideoElement) {
     const length = player.duration;
@@ -117,7 +128,7 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
   }
 
   function stop() {
-    if (!ready || !video.current) return;
+    if (!video.current) return;
     resumeAfterScrub.current = false;
     video.current.pause();
     video.current.currentTime = 0;
@@ -197,7 +208,7 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
   // Schedule precisely for B even when timeupdate is throttled during high-speed playback.
   useEffect(() => {
     const player = video.current;
-    if (!open || !loopRange || !range || !validRange || !player) return;
+    if (!open || !loopRange || !range || !hasSelection || !player) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const schedule = () => {
       clearTimeout(timer);
@@ -221,7 +232,7 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
       events.forEach(event => player.removeEventListener(event, schedule));
       player.removeEventListener("ended", restartAtEnd);
     };
-  }, [open, loopRange, range, validRange, video]);
+  }, [open, loopRange, range, hasSelection, video]);
 
   function closeTrim() {
     // Restore focus when the active editor control is about to leave the DOM.
@@ -247,13 +258,13 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
       setTime(boundary);
     }
     setRange({ start, end });
-    if (end <= start) setLoopRange(false);
+    if (!isPartialRange(start, end)) setLoopRange(false);
   }
 
   const soundOff = muted || volume === 0;
   return <>
     <div className="media-picture">
-      <video ref={video} playsInline loop={repeat && !loopRange}
+      <video ref={video} playsInline title={t(playing ? "player.pause" : "player.play")}
         onClick={togglePlay}
         onLoadedMetadata={event => syncTime(event.currentTarget)}
         onDurationChange={event => syncTime(event.currentTarget)}
@@ -264,6 +275,8 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
         onRateChange={event => setSpeed(event.currentTarget.playbackRate)}
         onVolumeChange={event => { setVolume(event.currentTarget.volume); setMuted(event.currentTarget.muted); }}
         onError={event => { if (event.currentTarget.hasAttribute("src")) onError(t("player.playbackError")); }} />
+      {onPrevious && <ClipArrow previous disabled={busy} onClick={onPrevious} />}
+      {onNext && <ClipArrow disabled={busy} onClick={onNext} />}
     </div>
     <div className="media-dock">
       <PlayerTimeline src={open ? src : null} duration={duration} time={time} buffered={buffered}
@@ -277,15 +290,12 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
         }} />
       <div className="media-controls">
         <div className="media-group media-transport">
-          {onPrevious && <Control icon="previous" label={t("player.previous")} disabled={busy} onClick={onPrevious} />}
           <Control icon="back" label={t("player.backFive")} title={`${t("player.backFive")} (←)`} disabled={!ready}
             onClick={() => seek((video.current?.currentTime ?? time) - 5)} />
-          <Control icon={playing ? "pause" : "play"} primary
-            label={playing ? t("player.pause") : t("player.play")} disabled={!src} onClick={togglePlay} />
-          <Control icon="stop" label={t("player.stop")} disabled={!ready} onClick={stop} />
+          <Control icon={playing ? "stop" : "play"} primary
+            label={t(playing ? "player.stop" : "player.play")} disabled={!src} onClick={playing ? stop : play} />
           <Control icon="forward" label={t("player.forwardFive")} title={`${t("player.forwardFive")} (→)`} disabled={!ready}
             onClick={() => seek((video.current?.currentTime ?? time) + 5)} />
-          {onNext && <Control icon="next" label={t("player.next")} disabled={busy} onClick={onNext} />}
         </div>
         <span className="media-time tabular">{playerTime(time)} <span>/ {playerTime(duration)}</span></span>
         <div className="media-group media-sound">
@@ -303,8 +313,6 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
             onChange={e => changeSpeed(e.currentTarget.valueAsNumber)} />
         </div>
         <div className="media-group media-modes">
-          <Control icon="repeat" label={t("player.repeat")} pressed={repeat} disabled={!ready}
-            onClick={() => { setRepeat(!repeat); setLoopRange(false); }} />
           <Control icon="cut" button={trimButton} label={t("player.trim")} pressed={!!range} disabled={!ready || busy || exporting || editing}
             onClick={() => {
               if (range) closeTrim();
@@ -325,10 +333,9 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
             <b>B</b><span className="tabular">{playerTime(range.end, true)}</span>
           </button>
           <span className="media-length tabular">{t("player.trimLength")} {playerTime(Math.max(0, range.end - range.start), true)}</span>
-          <Control icon="repeat" label={t("player.trimLoop")} pressed={loopRange} disabled={!validRange}
+          <Control icon="repeat" label={t("player.trimLoop")} pressed={loopRange} disabled={!hasSelection}
             onClick={() => {
               setLoopRange(!loopRange);
-              setRepeat(false);
               const player = video.current;
               if (!loopRange && player) {
                 if (player.currentTime < range.start || player.currentTime >= range.end) player.currentTime = range.start;
@@ -340,7 +347,7 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
           <label className="media-trash"><input type="checkbox" checked={trash} disabled={exporting}
             onChange={e => setTrash(e.currentTarget.checked)} />{t("player.trimTrash")}</label>
           <Button disabled={exporting} onClick={closeTrim}>{t("player.trimCancel")}</Button>
-          <Button variant="primary" disabled={!cutChosen || busy || exporting} onClick={async () => {
+          <Button variant="primary" disabled={!hasSelection || busy || exporting} onClick={async () => {
             if (await onExport(range.start, range.end, trash)) closeTrim();
           }}>{t(exporting ? "player.trimSaving" : "player.trimSaveCopy")}</Button>
         </div>
