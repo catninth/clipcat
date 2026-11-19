@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.2 – 2026-11-19
+
+- Trim clips in the player and save the result as a copy or replace the original.
+- Toggle playback once per Space press, even when the video or a button has focus.
+- Shorten the tray menu's exit label.
+
 ## 0.10.1 – 2026-11-12
 
 - Rename the playing clip in ClipCat or Windows Explorer without interrupting playback or seeking.

@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "clipcat"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "async-trait",
  "catninth-updater",
