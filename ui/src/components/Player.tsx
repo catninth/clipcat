@@ -132,24 +132,38 @@ function PlayingClip({ clip, open, onClose, onDelete, onRenamed, onTrimmed, onPr
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
-      if (e.key === " ") {
-        // The file name field takes spaces as text
-        if (editing || !ready || busy) return;
-        // Also stops the focused button or native controls from reacting to the same press
-        e.preventDefault();
-        if (!e.repeat) togglePlay();
-      } else if (e.key === "Escape") {
-        if (editing) {
-          if (!busy) { setDraft(null); setError(""); }
-        } else if (trimming) {
-          if (!busy) setTrim(null);
-        } else onClose();
-      }
+    // Space is claimed in the capture phase, before the focused video's native controls or a
+    // focused button can toggle too, which would pause and immediately resume playback.
+    const claimSpace = (e: KeyboardEvent) => {
+      // The file name field takes spaces as text
+      if (e.key !== " " || editing || !ready || busy) return false;
+      e.preventDefault();
+      e.stopPropagation();
+      return true;
     };
+    const onSpaceDown = (e: KeyboardEvent) => {
+      if (claimSpace(e) && !e.repeat) togglePlay();
+    };
+    // A focused button clicks on keyup, and media controls may react to keypress.
+    const onSpaceOther = (e: KeyboardEvent) => { claimSpace(e); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.key !== "Escape") return;
+      if (editing) {
+        if (!busy) { setDraft(null); setError(""); }
+      } else if (trimming) {
+        if (!busy) setTrim(null);
+      } else onClose();
+    };
+    document.addEventListener("keydown", onSpaceDown, true);
+    document.addEventListener("keypress", onSpaceOther, true);
+    document.addEventListener("keyup", onSpaceOther, true);
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onSpaceDown, true);
+      document.removeEventListener("keypress", onSpaceOther, true);
+      document.removeEventListener("keyup", onSpaceOther, true);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open, editing, trimming, ready, busy, onClose, trim]);
 
   useEffect(() => {

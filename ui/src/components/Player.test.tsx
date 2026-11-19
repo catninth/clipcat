@@ -226,6 +226,18 @@ it("toggles playback with Space, in and out of trimming", async () => {
   expect(video.play).toHaveBeenCalledOnce();
 });
 
+it("keeps Space from reaching the focused video's own controls", async () => {
+  const video = await renderReady();
+  vi.spyOn(video, "paused", "get").mockReturnValue(false);
+  const native = vi.fn();
+  video.addEventListener("keydown", native);
+  video.addEventListener("keyup", native);
+  fireEvent.keyDown(video, { key: " " });
+  fireEvent.keyUp(video, { key: " " });
+  expect(video.pause).toHaveBeenCalledOnce();
+  expect(native).not.toHaveBeenCalled();
+});
+
 it("types a space into the file name instead of toggling playback", async () => {
   const video = await renderReady();
   vi.mocked(video.play).mockClear();
