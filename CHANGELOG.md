@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.2 – 2026-11-20
+
 - Use one button to play or pause a clip. Pause keeps the current position instead of returning to the beginning.
 
 ## 0.11.1 – 2026-11-19
