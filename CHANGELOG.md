@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use one button to play or pause a clip. Pause keeps the current position instead of returning to the beginning.
+
 ## 0.11.1 – 2026-11-19
 
 - Use one button to play or stop a clip. Stop returns to the beginning. Click the video or press Space to pause and resume in place.

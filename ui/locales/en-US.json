@@ -47,7 +47,6 @@
     "player.close": "Close",
     "player.play": "Play",
     "player.pause": "Pause",
-    "player.stop": "Stop",
     "player.backFive": "Back 5 seconds",
     "player.forwardFive": "Forward 5 seconds",
     "player.mute": "Mute",

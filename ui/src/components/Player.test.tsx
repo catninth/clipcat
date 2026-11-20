@@ -234,35 +234,35 @@ it("keeps the clip, selection and file actions consistent after a failed export"
   expect(screen.getByRole("slider", { name: en["player.rangeStart"] }).getAttribute("aria-valuenow")).toBe("0.1");
 });
 
-it("uses one button for play and stop and rewinds on stop", async () => {
+it("uses one button for play and pause and keeps the position on pause", async () => {
   const video = await renderReady();
   Object.defineProperty(video, "duration", { configurable: true, value: 13 });
   fireEvent.durationChange(video);
   const paused = vi.spyOn(video, "paused", "get").mockReturnValue(true);
   const transport = button("player.play");
   const playIcon = transport.querySelector("svg")!.innerHTML;
-  expect(screen.queryByRole("button", { name: en["player.stop"] })).toBeNull();
+  expect(screen.queryByRole("button", { name: en["player.pause"] })).toBeNull();
   vi.mocked(video.play).mockClear();
   fireEvent.click(transport);
   expect(video.play).toHaveBeenCalledOnce();
   paused.mockReturnValue(false);
   fireEvent.play(video);
-  expect(button("player.stop")).toBe(transport);
+  expect(button("player.pause")).toBe(transport);
   expect(screen.queryByRole("button", { name: en["player.play"] })).toBeNull();
   expect(transport.querySelector("svg")!.innerHTML).not.toBe(playIcon);
 
+  vi.mocked(video.pause).mockClear();
   video.currentTime = 7;
   fireEvent.click(transport);
   expect(video.pause).toHaveBeenCalledOnce();
-  expect(video.currentTime).toBe(0);
+  expect(video.currentTime).toBe(7);
   paused.mockReturnValue(true);
   fireEvent.pause(video);
   expect(button("player.play")).toBe(transport);
   expect(transport.querySelector("svg")!.innerHTML).toBe(playIcon);
-  video.currentTime = 4;
   fireEvent.click(transport);
   expect(video.play).toHaveBeenCalledTimes(2);
-  expect(video.currentTime).toBe(4);
+  expect(video.currentTime).toBe(7);
   fireEvent.play(video);
   video.currentTime = video.duration;
   vi.spyOn(video, "ended", "get").mockReturnValue(true);

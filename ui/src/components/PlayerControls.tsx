@@ -24,7 +24,7 @@ interface Props {
 
 const icons = {
   play: <path fill="currentColor" stroke="none" d="M6 3.7a.9.9 0 0 1 1.4-.75l14 8.3a.9.9 0 0 1 0 1.5l-14 8.3A.9.9 0 0 1 6 20.3z" />,
-  stop: <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none" />,
+  pause: <path fill="currentColor" stroke="none" d="M5 4h5v16H5zm9 0h5v16h-5z" />,
   back: <><path d="M4 10a8 8 0 1 1 .6 7M3.5 4.5V10H9" /><path d="M14.4 9.2h-3.7l-.4 3.2c2.7-1.1 4.7-.5 4.2 1.7-.3 1.6-2.5 2.4-4.5 1.2" strokeWidth="1.5" /></>,
   forward: <><path d="M20 10a8 8 0 1 0-.6 7m1.1-12.5V10H15" /><path d="M14 9.2h-3.7l-.4 3.2c2.7-1.1 4.7-.5 4.2 1.7-.3 1.6-2.5 2.4-4.5 1.2" strokeWidth="1.5" /></>,
   volume: <><path d="M3 9h4l5-4v14l-5-4H3z" /><path d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" /></>,
@@ -125,14 +125,6 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
   function togglePlay() {
     if (video.current?.paused) play();
     else video.current?.pause();
-  }
-
-  function stop() {
-    if (!video.current) return;
-    resumeAfterScrub.current = false;
-    video.current.pause();
-    video.current.currentTime = 0;
-    setTime(0);
   }
 
   function changeVolume(value: number) {
@@ -292,8 +284,8 @@ export function PlayerControls({ video, dialog, src, open, fullscreen, busy, edi
         <div className="media-group media-transport">
           <Control icon="back" label={t("player.backFive")} title={`${t("player.backFive")} (←)`} disabled={!ready}
             onClick={() => seek((video.current?.currentTime ?? time) - 5)} />
-          <Control icon={playing ? "stop" : "play"} primary
-            label={t(playing ? "player.stop" : "player.play")} disabled={!src} onClick={playing ? stop : play} />
+          <Control icon={playing ? "pause" : "play"} primary
+            label={t(playing ? "player.pause" : "player.play")} disabled={!src} onClick={togglePlay} />
           <Control icon="forward" label={t("player.forwardFive")} title={`${t("player.forwardFive")} (→)`} disabled={!ready}
             onClick={() => seek((video.current?.currentTime ?? time) + 5)} />
         </div>
